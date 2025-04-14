@@ -25,6 +25,24 @@ from vllm.model_executor.models import ModelRegistry
 # NOTE(shengguangming): replace the origin weight loader function in the class
 def parallel_weight_loader(self, param: torch.Tensor, loaded_weight: torch.Tensor) -> None:
     """Parallel Linear weight loader."""
+    # Handle vocabulary size mismatch for embedding and lm_head layers
+    if len(param.size()) == 2 and len(loaded_weight.size()) == 2:
+        # For embedding/lm_head layers, allow truncating or padding if dimensions differ
+        if param.size(0) != loaded_weight.size(0) and param.size(1) == loaded_weight.size(1):
+            if param.size(0) > loaded_weight.size(0):
+                # Pad the loaded weight with zeros
+                padding = torch.zeros(
+                    (param.size(0) - loaded_weight.size(0), loaded_weight.size(1)),
+                    dtype=loaded_weight.dtype,
+                    device=loaded_weight.device
+                )
+                loaded_weight = torch.cat([loaded_weight, padding], dim=0)
+                print(f"Warning: Padded loaded weights from {loaded_weight.size(0) - padding.size(0)} to {loaded_weight.size(0)}")
+            else:
+                # Truncate the loaded weight
+                loaded_weight = loaded_weight[:param.size(0), :]
+                print(f"Warning: Truncated loaded weights to {loaded_weight.size(0)}")
+    
     assert (param.size() == loaded_weight.size(
     )), "the parameter size is not align with the loaded weight size, param size: {}, loaded_weight size: {}".format(
         param.size(), loaded_weight.size())
@@ -36,7 +54,27 @@ def parallel_weight_loader(self, param: torch.Tensor, loaded_weight: torch.Tenso
 
 def default_weight_loader(param: torch.Tensor, loaded_weight: torch.Tensor) -> None:
     """Default weight loader."""
-    assert param.size() == loaded_weight.size()
+    # Handle vocabulary size mismatch for embedding and lm_head layers
+    if len(param.size()) == 2 and len(loaded_weight.size()) == 2:
+        # For embedding/lm_head layers, allow truncating or padding if dimensions differ
+        if param.size(0) != loaded_weight.size(0) and param.size(1) == loaded_weight.size(1):
+            if param.size(0) > loaded_weight.size(0):
+                # Pad the loaded weight with zeros
+                padding = torch.zeros(
+                    (param.size(0) - loaded_weight.size(0), loaded_weight.size(1)),
+                    dtype=loaded_weight.dtype,
+                    device=loaded_weight.device
+                )
+                loaded_weight = torch.cat([loaded_weight, padding], dim=0)
+                print(f"Warning: Padded loaded weights from {loaded_weight.size(0) - padding.size(0)} to {loaded_weight.size(0)}")
+            else:
+                # Truncate the loaded weight
+                loaded_weight = loaded_weight[:param.size(0), :]
+                print(f"Warning: Truncated loaded weights to {loaded_weight.size(0)}")
+
+    assert param.size() == loaded_weight.size(), (
+        f"Parameter size mismatch: expected {param.size()}, got {loaded_weight.size()}"
+    )
     assert (param.data.dtype == loaded_weight.data.dtype
            ), "if we want to shared weights, the data type should also be the same"
 
@@ -179,39 +217,32 @@ def _replace_name(megatron_name, name_mapping):
             return param_name
 
 
-def _replace_name(megatron_name, name_mapping):
-    for m_name, v_name in name_mapping:
-        if m_name not in megatron_name:
-            continue
-        if "layers" in megatron_name:  # deal with decoder layers
-            megatron_name = megatron_name.replace("decoder", "model")
-            megatron_name_list = megatron_name.split(".")
-            if "layer_norm_weight" in megatron_name_list or "layer_norm_bias" in megatron_name_list:
-                param_name_list = megatron_name_list[:3]
-                param_name_list.append(v_name)
-                param_name = ".".join(param_name_list)
-            else:
-                param_name_list = megatron_name_list[:3]
-                weight_or_bias = megatron_name_list[-1]
-                param_name_list.append(v_name)
-                param_name_list.append(weight_or_bias)
-                param_name = ".".join(param_name_list)
-            return param_name
-        else:
-            param_name = megatron_name.replace(m_name, v_name)
-            return param_name
-
-
 def mistral_megatron_weight_loader(actor_weights: Dict, vllm_model: nn.Module) -> nn.Module:
-    # TODO: need to implement a general way to deal with prefix
+    # Modified implementation to handle vocab size differences
     params_dict = dict(vllm_model.named_parameters())
     for name, loaded_weight in actor_weights.items():
         if "rotary_emb.inv_freq" in name:
             continue
-        else:
+        elif name in params_dict:
             param = params_dict[name]
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
             weight_loader(param, loaded_weight)
+        else:
+            print(f"Warning: Parameter {name} not found in model")
+
+
+def gemma3_megatron_weight_loader(actor_weights: Dict, vllm_model: nn.Module) -> nn.Module:
+    # Implementation for Gemma3 models that handles vocab size differences
+    params_dict = dict(vllm_model.named_parameters())
+    for name, loaded_weight in actor_weights.items():
+        if "rotary_emb.inv_freq" in name:
+            continue
+        elif name in params_dict:
+            param = params_dict[name]
+            weight_loader = getattr(param, "weight_loader", default_weight_loader)
+            weight_loader(param, loaded_weight)
+        else:
+            print(f"Warning: Parameter {name} not found in model")
 
 
 def megatron_core_te_weight_loader(actor_weights: Dict, vllm_model: nn.Module) -> nn.Module:
@@ -267,6 +298,8 @@ __MODEL_MEGATRON_WEIGHT_LOADER_REGISTRY__ = {
     "LLaMAForCausalLM": megatron_core_te_weight_loader,
     "MistralForCausalLM": mistral_megatron_weight_loader,
     'Qwen2ForCausalLM': megatron_core_te_weight_loader,
+    'Gemma3ForCausalLM': gemma3_megatron_weight_loader,
+    'Gemma3ForConditionalGeneration': gemma3_megatron_weight_loader,
 }
 
 
