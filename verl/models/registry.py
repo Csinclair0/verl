@@ -25,7 +25,13 @@ _MODELS = {
     "Qwen2ForCausalLM":
         ("qwen2", ("ParallelQwen2ForCausalLMRmPadPP", "ParallelQwen2ForValueRmPadPP", "ParallelQwen2ForCausalLMRmPad")),
     "MistralForCausalLM": ("mistral", ("ParallelMistralForCausalLMRmPadPP", "ParallelMistralForValueRmPadPP",
-                                       "ParallelMistralForCausalLMRmPad"))
+                                       "ParallelMistralForCausalLMRmPad")),
+    "Gemma3ForCausalLM": 
+        ("gemma3", ("ParallelGemma3ForCausalLMRmPadPP", "ParallelGemma3ForValueRmPadPP",
+                   "ParallelGemma3ForCausalLMRmPad")),
+    "Gemma3ForConditionalGeneration": 
+        ("gemma3", ("ParallelGemma3ForConditionalGenerationRmPadPP", "ParallelGemma3ForValueRmPadPP",
+                   "ParallelGemma3ForCausalLMRmPad"))
 }
 
 
