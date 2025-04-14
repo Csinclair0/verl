@@ -20,6 +20,9 @@ def get_weight_loader(arch: str):
     _MODEL_WEIGHT_MEGATRON_LOADER_REGISTRY = {
         'LlamaForCausalLM': load_state_dict_to_megatron_gptmodel,
         'Qwen2ForCausalLM': load_state_dict_to_megatron_gptmodel,
+        'MistralForCausalLM': load_state_dict_to_megatron_gptmodel,
+        'Gemma3ForCausalLM': load_state_dict_to_megatron_gptmodel,
+        'Gemma3ForConditionalGeneration': load_state_dict_to_megatron_gptmodel,
     }
 
     if arch in _MODEL_WEIGHT_MEGATRON_LOADER_REGISTRY:
@@ -35,6 +38,9 @@ def get_weight_saver(arch: str):
     _MODEL_WEIGHT_MEGATRON_SAVER_REGISTRY = {
         'LlamaForCausalLM': merge_megatron_ckpt_gptmodel,
         'Qwen2ForCausalLM': merge_megatron_ckpt_gptmodel,
+        'MistralForCausalLM': merge_megatron_ckpt_gptmodel,
+        'Gemma3ForCausalLM': merge_megatron_ckpt_gptmodel,
+        'Gemma3ForConditionalGeneration': merge_megatron_ckpt_gptmodel,
     }
     if arch in _MODEL_WEIGHT_MEGATRON_SAVER_REGISTRY:
         return _MODEL_WEIGHT_MEGATRON_SAVER_REGISTRY[arch]
