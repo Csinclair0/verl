@@ -165,6 +165,14 @@ def convert_config(hf_config: PretrainedConfig, megatron_config) -> TransformerC
     overlap_p2p_comm = mpu.get_virtual_pipeline_model_parallel_world_size(
     ) is not None and mpu.get_virtual_pipeline_model_parallel_world_size() > 1
     batch_p2p_comm = False
+
+    if "Gemma3ForConditionalGeneration" in hf_config.architectures:
+        hf_config.num_hidden_layers = hf_config.text_config.num_hidden_layers
+        hf_config.num_attention_heads = hf_config.text_config.num_attention_heads
+        hf_config.num_key_value_heads = hf_config.text_config.num_key_value_heads
+        hf_config.intermediate_size = hf_config.text_config.intermediate_size
+        hf_config.hidden_size = hf_config.text_config.hidden_size
+
     transformer_config = TransformerConfig(
         num_layers=hf_config.num_hidden_layers,
         hidden_size=hf_config.hidden_size,
