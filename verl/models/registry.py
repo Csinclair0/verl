@@ -37,7 +37,6 @@ _MODELS = {
 
 # return model class
 class ModelRegistry:
-
     @staticmethod
     def load_model_cls(model_arch: str, value=False) -> Optional[Type[nn.Module]]:
         if model_arch not in _MODELS:

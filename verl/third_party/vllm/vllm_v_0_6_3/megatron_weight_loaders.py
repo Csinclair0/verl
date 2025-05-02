@@ -13,7 +13,7 @@
 # limitations under the License.
 # Adapted from https://github.com/vllm-project/vllm/tree/main/vllm/model_executor/model_loader
 
-from typing import Dict
+from typing import Dict, Iterable
 
 import torch
 import torch.nn as nn
@@ -25,58 +25,16 @@ from vllm.model_executor.models import ModelRegistry
 # NOTE(shengguangming): replace the origin weight loader function in the class
 def parallel_weight_loader(self, param: torch.Tensor, loaded_weight: torch.Tensor) -> None:
     """Parallel Linear weight loader."""
-    # Handle vocabulary size mismatch for embedding and lm_head layers
-    if len(param.size()) == 2 and len(loaded_weight.size()) == 2:
-        # For embedding/lm_head layers, allow truncating or padding if dimensions differ
-        if param.size(0) != loaded_weight.size(0) and param.size(1) == loaded_weight.size(1):
-            if param.size(0) > loaded_weight.size(0):
-                # Pad the loaded weight with zeros
-                padding = torch.zeros(
-                    (param.size(0) - loaded_weight.size(0), loaded_weight.size(1)),
-                    dtype=loaded_weight.dtype,
-                    device=loaded_weight.device
-                )
-                loaded_weight = torch.cat([loaded_weight, padding], dim=0)
-                print(f"Warning: Padded loaded weights from {loaded_weight.size(0) - padding.size(0)} to {loaded_weight.size(0)}")
-            else:
-                # Truncate the loaded weight
-                loaded_weight = loaded_weight[:param.size(0), :]
-                print(f"Warning: Truncated loaded weights to {loaded_weight.size(0)}")
-    
-    assert (param.size() == loaded_weight.size(
-    )), "the parameter size is not align with the loaded weight size, param size: {}, loaded_weight size: {}".format(
-        param.size(), loaded_weight.size())
-    assert (param.data.dtype == loaded_weight.data.dtype
-           ), "if we want to shared weights, the data type should also be the same"
+    assert param.size() == loaded_weight.size(), "the parameter size is not align with the loaded weight size, param size: {}, loaded_weight size: {}".format(param.size(), loaded_weight.size())
+    assert param.data.dtype == loaded_weight.data.dtype, "if we want to shared weights, the data type should also be the same"
 
     param.data = loaded_weight.data
 
 
 def default_weight_loader(param: torch.Tensor, loaded_weight: torch.Tensor) -> None:
     """Default weight loader."""
-    # Handle vocabulary size mismatch for embedding and lm_head layers
-    if len(param.size()) == 2 and len(loaded_weight.size()) == 2:
-        # For embedding/lm_head layers, allow truncating or padding if dimensions differ
-        if param.size(0) != loaded_weight.size(0) and param.size(1) == loaded_weight.size(1):
-            if param.size(0) > loaded_weight.size(0):
-                # Pad the loaded weight with zeros
-                padding = torch.zeros(
-                    (param.size(0) - loaded_weight.size(0), loaded_weight.size(1)),
-                    dtype=loaded_weight.dtype,
-                    device=loaded_weight.device
-                )
-                loaded_weight = torch.cat([loaded_weight, padding], dim=0)
-                print(f"Warning: Padded loaded weights from {loaded_weight.size(0) - padding.size(0)} to {loaded_weight.size(0)}")
-            else:
-                # Truncate the loaded weight
-                loaded_weight = loaded_weight[:param.size(0), :]
-                print(f"Warning: Truncated loaded weights to {loaded_weight.size(0)}")
-
-    assert param.size() == loaded_weight.size(), (
-        f"Parameter size mismatch: expected {param.size()}, got {loaded_weight.size()}"
-    )
-    assert (param.data.dtype == loaded_weight.data.dtype
-           ), "if we want to shared weights, the data type should also be the same"
+    assert param.size() == loaded_weight.size()
+    assert param.data.dtype == loaded_weight.data.dtype, "if we want to shared weights, the data type should also be the same"
 
     param.data = loaded_weight.data
 
@@ -217,64 +175,25 @@ def _replace_name(megatron_name, name_mapping):
             return param_name
 
 
-def mistral_megatron_weight_loader(actor_weights: Dict, vllm_model: nn.Module) -> nn.Module:
-    # Modified implementation to handle vocab size differences
+def mistral_megatron_weight_loader(actor_weights: Iterable, vllm_model: nn.Module) -> nn.Module:
+    # TODO: need to implement a general way to deal with prefix
     params_dict = dict(vllm_model.named_parameters())
-    for name, loaded_weight in actor_weights.items():
+    for name, weight in actor_weights:
         if "rotary_emb.inv_freq" in name:
             continue
         elif name in params_dict:
             param = params_dict[name]
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
-            weight_loader(param, loaded_weight)
-        else:
-            print(f"Warning: Parameter {name} not found in model")
+            weight_loader(param, weight)
 
 
-def gemma3_megatron_weight_loader(actor_weights: Dict, vllm_model: nn.Module) -> nn.Module:
-    # Implementation for Gemma3 models that handles vocab size differences
-    params_dict = dict(vllm_model.named_parameters())
-    for name, loaded_weight in actor_weights.items():
-        if "rotary_emb.inv_freq" in name:
-            continue
-        elif name in params_dict:
-            param = params_dict[name]
-            weight_loader = getattr(param, "weight_loader", default_weight_loader)
-            weight_loader(param, loaded_weight)
-        else:
-            print(f"Warning: Parameter {name} not found in model")
-
-
-def megatron_core_te_weight_loader(actor_weights: Dict, vllm_model: nn.Module) -> nn.Module:
-    params_mapping = [
-        # (megatron core gpt model name, vllm model name)
-        ("self_attention.linear_qkv.layer_norm_weight", "input_layernorm.weight"),
-        ("self_attention.linear_qkv.layer_norm_bias", "input_layernorm.bias"),
-        ("embedding.word_embeddings", "model.embed_tokens"),
-        ("self_attention.linear_qkv", "self_attn.qkv_proj"),
-        ("self_attention.linear_proj", "self_attn.o_proj"),
-        ("pre_mlp_layernorm", "post_attention_layernorm"),
-        ("mlp.linear_fc1.layer_norm_weight", "post_attention_layernorm.weight"),
-        ("mlp.linear_fc1.layer_norm_bias", "post_attention_layernorm.bias"),
-        ("mlp.linear_fc1", "mlp.gate_up_proj"),
-        ("mlp.linear_fc2", "mlp.down_proj"),
-        ("decoder.final_layernorm", "model.norm"),
-        ("output_layer", "lm_head"),
-    ]
+def megatron_core_te_weight_loader(actor_weights: Iterable, vllm_model: nn.Module) -> nn.Module:
     # NOTE(shengguangming): the megatron llama may have this prefix
     params_dict = dict(vllm_model.named_parameters())
-    for original_name, loaded_weight in actor_weights.items():
-        name = _replace_name(original_name, params_mapping)
-        if not name or name.endswith(".bias") and name not in params_dict:
-            continue
-        if "rotary_emb.inv_freq" in name:
-            continue
-        if vllm_model.config.tie_word_embeddings and "lm_head.weight" in name:
-            continue
-        else:
-            param = params_dict[name]
-            weight_loader = getattr(param, "weight_loader", default_weight_loader)
-            weight_loader(param, loaded_weight)
+    for name, weight in actor_weights:
+        param = params_dict[name]
+        weight_loader = getattr(param, "weight_loader", default_weight_loader)
+        weight_loader(param, weight)
 
 
 __LAYER_WEIGHT_MEGATRON_LOADER_REGISTRY__ = {
@@ -305,7 +224,7 @@ __MODEL_MEGATRON_WEIGHT_LOADER_REGISTRY__ = {
 
 # the actor model is .state_dict()
 # Load megatron weights
-def load_megatron_weights(actor_weights: Dict, vllm_model: nn.Module):
+def load_megatron_weights(actor_weights: Iterable, vllm_model: nn.Module):
     weight_loader = _get_model_weight_loader(vllm_model.__class__.__name__)
     weight_loader(actor_weights, vllm_model)
     # NOTE(sgm) to reduce peak memory usage, we offload vllm model to cpu
@@ -316,8 +235,7 @@ def load_megatron_weights(actor_weights: Dict, vllm_model: nn.Module):
 def _get_model_weight_loader(arch: str):
     if arch in __MODEL_MEGATRON_WEIGHT_LOADER_REGISTRY__:
         return __MODEL_MEGATRON_WEIGHT_LOADER_REGISTRY__[arch]
-    raise ValueError(f"Model architectures {arch} are not supported for now. "
-                     f"Supported architectures: {ModelRegistry.get_supported_archs()}")
+    raise ValueError(f"Model architectures {arch} are not supported for now. Supported architectures: {ModelRegistry.get_supported_archs()}")
 
 
 def update_megatron_weight_loader():

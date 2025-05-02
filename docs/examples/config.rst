@@ -3,8 +3,8 @@
 Config Explanation
 ===================
 
-ppo_trainer.yaml for FSDP Backend
----------------------------------
+ppo_trainer.yaml for RL FSDP Backend
+-------------------------------------
 
 Data
 ~~~~
@@ -22,7 +22,7 @@ Data
      return_raw_input_ids: False  # This should be set to true when the tokenizer between policy and rm differs
      return_raw_chat: False
      shuffle: True
-     filter_overlong_prompts: False # for large-scale dataset, filtering overlong prompts could be timeconsuming. You should disable this and set `truncation='left'
+     filter_overlong_prompts: False # for large-scale dataset, filtering overlong prompts could be timeconsuming. You should disable this and set `truncation='left'`
      truncation: error
      image_key: images
      custom_cls:
@@ -55,7 +55,7 @@ Data
 - ``data.shuffle``: Whether to shuffle the data in the dataloader.
 - ``data.filter_overlong_prompts``: Default don't filter. You can filter for small-scale dataset. 
   For large-scale dataset, filtering overlong prompts could be timeconsuming. 
-  You should disable this and set ``truncation='left``
+  You should disable this and set ``truncation='left'``
 - ``data.truncation``: Truncate the input_ids or prompt length if they
   exceed max_prompt_length. Default is 'error', not allow exceed the
   max_prompt_length. The users should increase the max_prompt_length if
@@ -158,6 +158,8 @@ Actor/Rollout/Reference Policy
       log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}
       # for hf rollout
       do_sample: True
+      engine_kwargs: # inference engine parameters
+        swap_space: null # null means "use the engine default value" (usually 4 GB), setting it to, e.g., 32 means 32 GB
       # number of responses (i.e. num sample times)
       n: 1 # > 1 for grpo, rloo
 
@@ -285,6 +287,10 @@ Reference model will be enabled when ``actor.use_kl_loss`` or/and ``algorithm.us
 - ``do_sample``: Whether to sample. If set to False, the rollout model
   will perform greedy sampling. We disable ``do_sample`` during
   validation.
+
+- ``actor_rollout_ref.rollout.engine_kwargs.swap_space``: swap space in GB used by the inference engine.
+  - ``null``: means not setting and using the engine default value (usually, e.g., 4 GB for vLLM)
+  - Positive integer, e.g., ``32`` means 32 GB.
 
 - ``actor_rollout_ref.rollout.ignore_eos``: Whether to ignore the EOS
   token and continue generating tokens after the EOS token is generated.
@@ -487,3 +493,24 @@ Customized Reward Function
 
 - ``custom_reward_function.path``: The path to the file containing your customized reward function. If not specified, pre-implemented reward functions will be used.
 - ``custom_reward_function.name`` (Optional) : The name of the reward function within the specified file. Default is 'compute_score'.
+
+sft_trainer.yaml for SFT FSDP Backend
+--------------------------------------
+
+.. code:: yaml
+
+   optim:
+     lr: 1e-5
+     weight_decay: 0.01
+     warmup_steps_ratio: 0.1
+     clip_grad: 1.0
+     lr_scheduler: cosine
+
+- ``optim.lr``: Learning rate for the optimizer.
+- ``optim.weight_decay``: Weight decay for the optimizer.
+- ``optim.warmup_steps_ratio``: Ratio of warmup steps to total training steps.
+- ``optim.clip_grad``: Gradient clipping value.
+- ``optim.lr_scheduler``: Learning rate scheduler type. Options:
+
+  - ``cosine``: Cosine learning rate scheduler with warmup (default).
+  - ``wsd``: Warmup-Stable-Decay scheduler that provides a stable learning rate phase between warmup and decay phases.
