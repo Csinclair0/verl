@@ -46,6 +46,9 @@ def hf_to_mcore_config(hf_config: PretrainedConfig, dtype: torch.dtype) -> Trans
     MODEL_CONFIG_CONVERTER_REGISTRY = {
         "LlamaForCausalLM": hf_to_mcore_config_dense,
         "Qwen2ForCausalLM": hf_to_mcore_config_dense,
+        "MistralForCausalLM": hf_to_mcore_config_dense,
+        "Gemma3ForCausalLM": hf_to_mcore_config_dense,
+        "Gemma3ForConditionalGeneration": hf_to_mcore_config_dense,
         "Qwen2MoeForCausalLM": hf_to_mcore_config_qwen2moe,
         "DeepseekV3ForCausalLM": hf_to_mcore_config_dpskv3,
         "Qwen2_5_VLForConditionalGeneration": hf_to_mcore_config_qwen2_5_vl,
@@ -74,6 +77,9 @@ def init_mcore_model(
         "DeepseekV3ForCausalLM": init_mcore_model_dpskv3,
         "Qwen2_5_VLForConditionalGeneration": init_mcore_model_qwen2_5_vl,
         "Llama4ForConditionalGeneration": init_mcore_model_llama4,
+        "Gemma3ForCausalLM": init_mcore_model_dense,
+        "Gemma3ForConditionalGeneration": init_mcore_model_dense,
+        "MistralForCausalLM": init_mcore_model_dense,
     }
     assert len(hf_config.architectures) == 1, "Only one architecture is supported for now"
     arch = hf_config.architectures[0]
@@ -90,6 +96,9 @@ def get_mcore_forward_fn(hf_config: PretrainedConfig):
         "DeepseekV3ForCausalLM": gptmodel_forward_dpskv3,
         "Qwen2_5_VLForConditionalGeneration": gptmodel_forward_qwen2_5_vl,
         "Llama4ForConditionalGeneration": gptmodel_forward_llama4,
+        "Gemma3ForCausalLM": gptmodel_forward_dense,
+        "Gemma3ForConditionalGeneration": gptmodel_forward_dense,
+        "MistralForCausalLM": gptmodel_forward_dense,
     }
     assert len(hf_config.architectures) == 1, "Only one architecture is supported for now"
     arch = hf_config.architectures[0]
@@ -103,6 +112,9 @@ def get_mcore_weight_converter(hf_config: PretrainedConfig, dtype: torch.dtype):
         "LlamaForCausalLM": McoreToHFWeightConverterDense,
         "Qwen2ForCausalLM": McoreToHFWeightConverterDense,
         "Qwen2MoeForCausalLM": McoreToHFWeightConverterQwen2Moe,
+        "Gemma3ForCausalLM": McoreToHFWeightConverterDense,
+        "Gemma3ForConditionalGeneration": McoreToHFWeightConverterDense,
+        "MistralForCausalLM": McoreToHFWeightConverterDense,
     }
     assert len(hf_config.architectures) == 1, "Only one architecture is supported for now"
     arch = hf_config.architectures[0]
