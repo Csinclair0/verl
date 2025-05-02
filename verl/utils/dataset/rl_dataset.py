@@ -165,7 +165,7 @@ class RLHFDataset(Dataset):
         if self.processor is not None:
             from verl.utils.dataset.vision_utils import process_image, process_video
 
-        prompt_with_chat_template = chat
+            prompt_with_chat_template = chat
 
             images = None
             if self.image_key in row_dict:
