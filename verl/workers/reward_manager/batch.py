@@ -15,6 +15,7 @@
 from collections import defaultdict
 
 import torch
+import wandb
 
 from verl import DataProto
 
@@ -26,6 +27,14 @@ class BatchRewardManager:
         self.compute_score = compute_score
         self.reward_fn_key = reward_fn_key
         self.reward_kwargs = reward_kwargs
+
+    def set_token_penalties(self, token_penalties: dict):
+        """
+        Set penalties for specific token IDs.
+        Args:
+            token_penalties: dict mapping token IDs to penalty values
+        """
+        self.token_penalties = token_penalties
 
     def verify(self, data):
         prompt_ids = data.batch["prompts"]
@@ -59,6 +68,18 @@ class BatchRewardManager:
     def __call__(self, data: DataProto, return_dict=False):
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if "rm_scores" in data.batch.keys():
+            # Apply token-level penalties if specified
+            if hasattr(self, 'token_penalties'):
+                token_level_scores = data.batch["rm_scores"]
+                response_ids = data.batch["responses"]
+                
+                # Apply penalties for each token
+                for token_id, penalty in self.token_penalties.items():
+                    mask = (response_ids == token_id)
+                    token_level_scores[mask] -= penalty
+                
+                data.batch["rm_scores"] = token_level_scores
+
             if return_dict:
                 return {"reward_tensor": data.batch["rm_scores"]}
             else:
@@ -95,10 +116,20 @@ class BatchRewardManager:
                 response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
                 prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
                 ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
-                print("[prompt]", prompt_str)
-                print("[response]", response_str)
-                print("[ground_truth]", ground_truth)
-                print("[score]", scores[i])
+                
+                # Log to wandb table
+                table_data = [[
+                    prompt_str,
+                    response_str,
+                    ground_truth,
+                    scores[i]
+                ]]
+                table = wandb.Table(
+                    columns=["Prompt", "Response", "Ground Truth", "Score"],
+                    data=table_data
+                )
+                wandb.log({"prompt_response_data": table})
+                
                 already_printed[data_source] = already_printed.get(data_source, 0) + 1
 
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
