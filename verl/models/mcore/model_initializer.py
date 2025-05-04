@@ -33,7 +33,7 @@ def init_mcore_model_dense(
     assert tfconfig.normalization == "RMSNorm", "only RMSNorm is supported for now"
     transformer_layer_spec = get_gpt_decoder_block_spec(tfconfig, use_transformer_engine=use_te)
     rope_scaling_args = {}
-    if hf_config.rope_scaling is not None:
+    if getattr(hf_config, "rope_scaling", None) is not None:
         assert hf_config.rope_scaling["type"] == "linear", "only linear scaling is supported for now"
         rope_scaling_args["seq_len_interpolation_factor"] = hf_config.rope_scaling["factor"]
     model = GPTModel(
