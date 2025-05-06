@@ -444,6 +444,9 @@ class MegatronPPOActor(BasePPOActor):
                 pass
             else:
                 raise NotImplementedError
+            # Log learning rate after optimizer step
+            if hasattr(self.actor_optimizer, "param_groups") and len(self.actor_optimizer.param_groups) > 0:
+                metrics["actor/lr"] = self.actor_optimizer.param_groups[0]["lr"]
             self.prof.step()
         # add empty cache after each compute
         self.prof.stop_and_save()
