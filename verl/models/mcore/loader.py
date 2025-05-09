@@ -419,7 +419,6 @@ def load_state_dict_to_megatron_gptmodel(state_dict, wrapped_models, config, par
                 sync_layer.mlp.linear_fc2.weight if dst_pp_rank == pp_rank else None,
                 f"{layer_name}.mlp.down_proj.weight",
                 chunk_dim=1,
-                mutate_func=lambda w, _hs=config.hidden_size: w[:, : _hs],
             )
         # Final Layernorm
         # -------------------
