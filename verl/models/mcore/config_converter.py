@@ -25,15 +25,31 @@ def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) ->
     # for LlamaForCausalLM or Qwen2ForCausalLM
     from megatron.core import parallel_state as mpu
 
+    # Handle Gemma3's nested config structure
+    if hasattr(hf_config, 'text_config'):
+        num_hidden_layers = hf_config.text_config.num_hidden_layers
+        hidden_size = hf_config.text_config.hidden_size
+        num_attention_heads = hf_config.text_config.num_attention_heads
+        num_key_value_heads = hf_config.text_config.num_key_value_heads
+        intermediate_size = hf_config.text_config.intermediate_size
+        attention_dropout = hf_config.text_config.attention_dropout
+    else:
+        num_hidden_layers = hf_config.num_hidden_layers
+        hidden_size = hf_config.hidden_size
+        num_attention_heads = hf_config.num_attention_heads
+        num_key_value_heads = hf_config.num_key_value_heads
+        intermediate_size = hf_config.intermediate_size
+        attention_dropout = hf_config.attention_dropout
+
     qkv_bias = True if "Qwen2ForCausalLM" in hf_config.architectures else getattr(hf_config, "attention_bias", False)
     overlap_p2p_comm = mpu.get_virtual_pipeline_model_parallel_world_size() is not None and mpu.get_virtual_pipeline_model_parallel_world_size() > 1
     batch_p2p_comm = False
     transformer_config = TransformerConfig(
-        num_layers=hf_config.num_hidden_layers,
-        hidden_size=hf_config.hidden_size,
-        num_attention_heads=hf_config.num_attention_heads,
-        num_query_groups=hf_config.num_key_value_heads,
-        ffn_hidden_size=hf_config.intermediate_size,
+        num_layers=num_hidden_layers,
+        hidden_size=hidden_size,
+        num_attention_heads=num_attention_heads,
+        num_query_groups=num_key_value_heads,
+        ffn_hidden_size=intermediate_size,
         activation_func=F.silu,
         normalization="RMSNorm",
         gated_linear_unit=True,
@@ -51,7 +67,7 @@ def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) ->
         variable_seq_lengths=True,
         masked_softmax_fusion=True,
         moe_token_dispatcher_type="alltoall",
-        attention_dropout=hf_config.attention_dropout,
+        attention_dropout=attention_dropout,
         hidden_dropout=getattr(hf_config, "hidden_dropout", 0.0),
         add_qkv_bias=qkv_bias,
         bf16=dtype is torch.bfloat16,
