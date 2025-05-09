@@ -397,12 +397,12 @@ def load_state_dict_to_megatron_gptmodel(state_dict, wrapped_models, config, par
                     f"{layer_name}.self_attn.v_proj.bias",
                     bias=True,
                 )
-
+            mutate_func = lambda w, _hs=config.hidden_size: w[:, : _hs] if 'Gemma3' in config.model_type else None 
             _broadcast_tp_shard_tensor(
                 sync_layer.self_attention.linear_proj.weight if dst_pp_rank == pp_rank else None,
                 f"{layer_name}.self_attn.o_proj.weight",
                 chunk_dim=1,
-                mutate_func=lambda w, _hs=config.hidden_size: w[:, : _hs], ## Handle Gemma3
+                mutate_func=mutate_func, # Handle Gemma3
             )
             _broadcast_tensor(
                 sync_layer.mlp.linear_fc1.layer_norm_weight if dst_pp_rank == pp_rank else None,
@@ -419,6 +419,7 @@ def load_state_dict_to_megatron_gptmodel(state_dict, wrapped_models, config, par
                 sync_layer.mlp.linear_fc2.weight if dst_pp_rank == pp_rank else None,
                 f"{layer_name}.mlp.down_proj.weight",
                 chunk_dim=1,
+                mutate_func=lambda w, _hs=config.hidden_size: w[:, : _hs] if 'Gemma3' in config.model_type else None,
             )
         # Final Layernorm
         # -------------------
