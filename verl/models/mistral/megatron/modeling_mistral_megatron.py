@@ -19,6 +19,14 @@ from transformers import MistralConfig
 from megatron.core.transformer import TransformerConfig
 from verl.utils.model import get_parallel_gptmodel_from_config
 
+# Import any necessary functionality from the original model if needed
+from .modeling_mistral_original import (
+    MistralRMSNorm,
+    MistralMLP,
+    MistralRotaryEmbedding,
+    apply_rotary_pos_emb,
+)
+
 
 class ParallelMistralForCausalLMRmPadPP(nn.Module):
     """Parallel Mistral model for causal language modeling with Pipeline Parallelism."""
@@ -40,6 +48,11 @@ class ParallelMistralForCausalLMRmPadPP(nn.Module):
             normalization="RMSNorm",
             layernorm_epsilon=config.rms_norm_eps,
             init_method_std=config.initializer_range,
+            # Mistral-specific parameters
+            use_positional_embedding=True,
+            positional_embedding_type="rope",
+            rotary_base=config.rope_theta if hasattr(config, "rope_theta") else 10000.0,
+            sliding_window=getattr(config, "sliding_window", None),
         )
 
         self.model = get_parallel_gptmodel_from_config(
@@ -62,7 +75,18 @@ class ParallelMistralForCausalLMRmPadPP(nn.Module):
         output_hidden_states=None,
         return_dict=None,
         packed_seq_params=None,
+        cu_seqlens=None,
+        max_seqlen_in_batch=None,
     ):
+        # Handle packed inputs if provided
+        if self.pack_seqs and cu_seqlens is not None and max_seqlen_in_batch is not None:
+            packed_params = {
+                "cu_seqlens": cu_seqlens,
+                "max_seqlen_in_batch": max_seqlen_in_batch,
+            }
+        else:
+            packed_params = packed_seq_params
+
         return gptmodel_forward(
             model=self.model,
             input_ids=input_ids,
@@ -71,6 +95,7 @@ class ParallelMistralForCausalLMRmPadPP(nn.Module):
             sequence_parallel=self.config.sequence_parallel_enabled
             if hasattr(self.config, "sequence_parallel_enabled") else False,
             pack_seqs=self.pack_seqs,
+            packed_seq_params=packed_params,
         )
 
 
@@ -94,6 +119,11 @@ class ParallelMistralForValueRmPadPP(nn.Module):
             normalization="RMSNorm",
             layernorm_epsilon=config.rms_norm_eps,
             init_method_std=config.initializer_range,
+            # Mistral-specific parameters
+            use_positional_embedding=True,
+            positional_embedding_type="rope",
+            rotary_base=config.rope_theta if hasattr(config, "rope_theta") else 10000.0,
+            sliding_window=getattr(config, "sliding_window", None),
         )
 
         self.model = get_parallel_gptmodel_from_config(
@@ -117,7 +147,18 @@ class ParallelMistralForValueRmPadPP(nn.Module):
         output_hidden_states=None,
         return_dict=None,
         packed_seq_params=None,
+        cu_seqlens=None,
+        max_seqlen_in_batch=None,
     ):
+        # Handle packed inputs if provided
+        if self.pack_seqs and cu_seqlens is not None and max_seqlen_in_batch is not None:
+            packed_params = {
+                "cu_seqlens": cu_seqlens,
+                "max_seqlen_in_batch": max_seqlen_in_batch,
+            }
+        else:
+            packed_params = packed_seq_params
+
         return gptmodel_forward(
             model=self.model,
             input_ids=input_ids,
@@ -127,6 +168,7 @@ class ParallelMistralForValueRmPadPP(nn.Module):
             if hasattr(self.config, "sequence_parallel_enabled") else False,
             value_model=True,
             pack_seqs=self.pack_seqs,
+            packed_seq_params=packed_params,
         )
 
 
@@ -150,6 +192,11 @@ class ParallelMistralForCausalLMRmPad(nn.Module):
             normalization="RMSNorm",
             layernorm_epsilon=config.rms_norm_eps,
             init_method_std=config.initializer_range,
+            # Mistral-specific parameters
+            use_positional_embedding=True,
+            positional_embedding_type="rope",
+            rotary_base=config.rope_theta if hasattr(config, "rope_theta") else 10000.0,
+            sliding_window=getattr(config, "sliding_window", None),
         )
 
         self.model = get_parallel_gptmodel_from_config(
@@ -172,7 +219,18 @@ class ParallelMistralForCausalLMRmPad(nn.Module):
         output_hidden_states=None,
         return_dict=None,
         packed_seq_params=None,
+        cu_seqlens=None,
+        max_seqlen_in_batch=None,
     ):
+        # Handle packed inputs if provided
+        if self.pack_seqs and cu_seqlens is not None and max_seqlen_in_batch is not None:
+            packed_params = {
+                "cu_seqlens": cu_seqlens,
+                "max_seqlen_in_batch": max_seqlen_in_batch,
+            }
+        else:
+            packed_params = packed_seq_params
+
         return gptmodel_forward(
             model=self.model,
             input_ids=input_ids,
@@ -181,4 +239,5 @@ class ParallelMistralForCausalLMRmPad(nn.Module):
             sequence_parallel=self.config.sequence_parallel_enabled
             if hasattr(self.config, "sequence_parallel_enabled") else False,
             pack_seqs=self.pack_seqs,
+            packed_seq_params=packed_params,
         ) 
