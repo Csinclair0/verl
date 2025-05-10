@@ -98,7 +98,7 @@ class BatchRewardManager:
         already_printed = {}
         min_score = min(scores) + 0.001
         max_score = max(scores) - 0.001
-        random_index = random.sample(0, len(data) - 1)
+        random_index = random.randint(0, len(data) - 1)
         for i in range(len(data)):
             length = valid_response_lengths[i].item()
             score = scores[i]
