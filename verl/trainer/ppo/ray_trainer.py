@@ -1032,6 +1032,7 @@ class RayPPOTrainer:
                             if "wandb" in self.config.trainer.logger: 
                                 for table_payload in wandb_tables_payload:
                                     try:
+                                        import wandb
                                         wandb_table = wandb.Table(columns=table_payload["columns"], data=table_payload["data"])
                                         logger.log({table_payload["name"]: wandb_table}, step=self.global_steps)
                                     except Exception as e:
