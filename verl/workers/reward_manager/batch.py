@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from collections import defaultdict
-
+import random
 import torch
 import wandb
 
@@ -98,6 +98,7 @@ class BatchRewardManager:
         already_printed = {}
         min_score = min(scores) + 0.001
         max_score = max(scores) - 0.001
+        random_index = random.sample(0, len(data) - 1)
         for i in range(len(data)):
             length = valid_response_lengths[i].item()
             score = scores[i]
@@ -113,7 +114,7 @@ class BatchRewardManager:
             reward_tensor[i, length - 1] = reward
 
             data_source = data_sources[i]
-            if already_printed.get(data_source, 0) < self.num_examine:
+            if i == random_index:
                 response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
                 prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
                 ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
@@ -124,7 +125,7 @@ class BatchRewardManager:
                     response_str,
                     ground_truth,
                     scores[i], 
-                    "General"
+                    "Random"
                 ]]
                 table = wandb.Table(
                     columns=["Prompt", "Response", "Ground Truth", "Score", "Type"],
@@ -151,7 +152,7 @@ class BatchRewardManager:
                 )
                 wandb.log({"prompt_response_data": table})
 
-                print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
+                #print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
                 
             if scores[i] > max_score:
                 response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
@@ -172,7 +173,7 @@ class BatchRewardManager:
                 )
                 wandb.log({"prompt_response_data": table}) 
 
-                print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
+                #print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
                 
             
 
