@@ -96,7 +96,8 @@ class BatchRewardManager:
         scores = self.verify(data)
         rewards = []
         already_printed = {}
-
+        min_score = min(scores) + 0.001
+        max_score = max(scores) - 0.001
         for i in range(len(data)):
             length = valid_response_lengths[i].item()
             score = scores[i]
@@ -122,15 +123,58 @@ class BatchRewardManager:
                     prompt_str,
                     response_str,
                     ground_truth,
-                    scores[i]
+                    scores[i], 
+                    "General"
                 ]]
                 table = wandb.Table(
-                    columns=["Prompt", "Response", "Ground Truth", "Score"],
+                    columns=["Prompt", "Response", "Ground Truth", "Score", "Type"],
                     data=table_data
                 )
                 wandb.log({"prompt_response_data": table})
-                
                 already_printed[data_source] = already_printed.get(data_source, 0) + 1
+            if scores[i] < min_score:
+                response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
+                prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
+                ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
+                
+                # Log to wandb table
+                table_data = [[
+                    prompt_str,
+                    response_str,
+                    ground_truth,
+                    scores[i], 
+                    "Low"
+                ]]
+                table = wandb.Table(
+                    columns=["Prompt", "Response", "Ground Truth", "Score", "Type"],
+                    data=table_data
+                )
+                wandb.log({"prompt_response_data": table})
+
+                print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
+                
+            if scores[i] > max_score:
+                response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
+                prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
+                ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
+                
+                # Log to wandb table
+                table_data = [[
+                    prompt_str,
+                    response_str,
+                    ground_truth,
+                    scores[i], 
+                    "High"
+                ]]  
+                table = wandb.Table(
+                    columns=["Prompt", "Response", "Ground Truth", "Score", "Type"],
+                    data=table_data
+                )
+                wandb.log({"prompt_response_data": table}) 
+
+                print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
+                
+            
 
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
 
