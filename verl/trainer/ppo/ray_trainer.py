@@ -964,13 +964,17 @@ class RayPPOTrainer:
                     with _timer("reward", timing_raw):
                         # compute reward model score
                         if self.use_rm:
-                            reward_tensor = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor)
+                            reward_tensor_rm_output = self.rm_wg.compute_rm_score(batch)
+                            batch = batch.union(reward_tensor_rm_output)
 
                         if self.config.reward_model.launch_reward_fn_async:
-                            future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
+                            future_reward_dict = compute_reward_async.remote(batch, self.config, self.tokenizer)
+                            # Placeholder for sync result, will be overwritten if not async
+                            reward_dict_sync = None 
                         else:
-                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                            reward_dict_sync = compute_reward(batch, self.reward_fn)
+                            # Placeholder for async future, will be overwritten if async
+                            future_reward_dict = None 
 
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):
@@ -998,14 +1002,40 @@ class RayPPOTrainer:
 
                     with _timer("adv", timing_raw):
                         # we combine with rule-based rm
-                        reward_extra_infos_dict: dict[str, list]
+                        
                         if self.config.reward_model.launch_reward_fn_async:
-                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
-                        batch.batch["token_level_scores"] = reward_tensor
+                            processed_reward_output = ray.get(future_reward_dict)
+                        else:
+                            processed_reward_output = reward_dict_sync
 
-                        print(f"{list(reward_extra_infos_dict.keys())=}")
+                        # Extract components from the processed_reward_output dictionary
+                        reward_tensor = processed_reward_output.get("reward_tensor")
+                        reward_extra_infos_dict = processed_reward_output.get("reward_extra_info", {})
+                        acc_tensor = processed_reward_output.get("acc_tensor")
+                        # all_scores_list = processed_reward_output.get("all_scores_list", []) # Available if needed
+                        aggregated_rm_metrics = processed_reward_output.get("aggregated_batch_metrics", {})
+                        wandb_tables_payload = processed_reward_output.get("wandb_tables_payload", [])
+
+                        if reward_tensor is not None:
+                            batch.batch["token_level_scores"] = reward_tensor
+                        
                         if reward_extra_infos_dict:
-                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+                            processed_extra_infos = {}
+                            for k, v_list in reward_extra_infos_dict.items():
+                                try:
+                                    processed_extra_infos[k] = np.array(v_list)
+                                except ValueError:
+                                    processed_extra_infos[k] = v_list 
+                            batch.non_tensor_batch.update(processed_extra_infos)
+
+                        if wandb_tables_payload:
+                            if "wandb" in self.config.trainer.logger: 
+                                for table_payload in wandb_tables_payload:
+                                    try:
+                                        wandb_table = wandb.Table(columns=table_payload["columns"], data=table_payload["data"])
+                                        logger.log({table_payload["name"]: wandb_table}, step=self.global_steps)
+                                    except Exception as e:
+                                        print(f"Error creating or logging wandb.Table '{table_payload.get('name', 'unknown_table')}': {e}")
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
@@ -1079,6 +1109,11 @@ class RayPPOTrainer:
                         "training/epoch": epoch,
                     }
                 )
+                # Add aggregated metrics from reward manager to the main metrics dict
+                if aggregated_rm_metrics:
+                    for key, value in aggregated_rm_metrics.items():
+                        metrics[f"reward_manager/{key}"] = value
+                
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
