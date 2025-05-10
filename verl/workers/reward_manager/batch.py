@@ -132,7 +132,6 @@ class BatchRewardManager:
                     data=table_data
                 )
                 wandb.log({"prompt_response_data": table})
-                already_printed[data_source] = already_printed.get(data_source, 0) + 1
             if scores[i] < min_score:
                 response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
                 prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
