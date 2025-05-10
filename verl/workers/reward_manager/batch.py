@@ -15,7 +15,7 @@
 from collections import defaultdict
 import random
 import torch
-import wandb
+# import wandb # Removed as wandb.log and wandb.Table are no longer used directly here
 
 from verl import DataProto
 
@@ -81,6 +81,11 @@ class BatchRewardManager:
                 data.batch["rm_scores"] = token_level_scores
 
             if return_dict:
+                # Even if returning early, ensure a consistent structure if detailed dict is expected
+                # However, in this branch, we don't have scores/tables computed by this manager.
+                # So, we return only what's available. The caller should be aware.
+                # Or, we assume if rm_scores is present, this detailed logging is skipped.
+                # For now, sticking to minimal changes for this branch.
                 return {"reward_tensor": data.batch["rm_scores"]}
             else:
                 return data.batch["rm_scores"]
@@ -93,92 +98,116 @@ class BatchRewardManager:
         valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
         data_sources = data.non_tensor_batch[self.reward_fn_key]
 
-        scores = self.verify(data)
-        rewards = []
-        already_printed = {}
-        min_score = min(scores) + 0.001
-        max_score = max(scores) - 0.001
-        random_index = random.randint(0, len(data) - 1)
+        scores = self.verify(data) # This is a list of scores
+        rewards = [] # This will hold the primary numeric reward for each item
+        
+        wandb_tables_payload = [] # To store data for tables
+
+        # Use different names for thresholds to avoid confusion with batch min/max
+        low_score_threshold = min(scores) + 0.001 if scores else 0
+        high_score_threshold = max(scores) - 0.001 if scores else 0
+        
+        random_index = -1
+        if len(data) > 0:
+            random_index = random.randint(0, len(data) - 1)
+
         for i in range(len(data)):
             length = valid_response_lengths[i].item()
-            score = scores[i]
+            current_score = scores[i] # Can be a dict or a float/int
 
-            if isinstance(score, dict):
-                reward = score["score"]
-                for key, value in score.items():
+            numeric_reward_value = 0.0
+            if isinstance(current_score, dict):
+                numeric_reward_value = current_score.get("score", 0.0) # Ensure there's a default
+                for key, value in current_score.items():
                     reward_extra_info[key].append(value)
             else:
-                reward = score
+                numeric_reward_value = current_score
 
-            rewards.append(reward)
-            reward_tensor[i, length - 1] = reward
+            rewards.append(numeric_reward_value)
+            reward_tensor[i, length - 1] = numeric_reward_value
 
-            data_source = data_sources[i]
+            # Common data for tables
+            response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
+            prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
+            ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
+            table_columns = ["Prompt", "Response", "Ground Truth", "Score", "Type"]
+
             if i == random_index:
-                response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
-                prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
-                ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
-                
-                # Log to wandb table
                 table_data = [[
                     prompt_str,
                     response_str,
                     ground_truth,
-                    scores[i], 
+                    current_score, # Log the original score (could be dict)
                     "Random"
                 ]]
-                table = wandb.Table(
-                    columns=["Prompt", "Response", "Ground Truth", "Score", "Type"],
-                    data=table_data
-                )
-                wandb.log({"prompt_response_data": table})
-            if scores[i] < min_score:
-                response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
-                prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
-                ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
-                
-                # Log to wandb table
+                wandb_tables_payload.append({
+                    "name": "prompt_response_data_random",
+                    "columns": table_columns,
+                    "data": table_data
+                })
+            
+            if numeric_reward_value < low_score_threshold:
                 table_data = [[
                     prompt_str,
                     response_str,
                     ground_truth,
-                    scores[i], 
+                    current_score,
                     "Low"
                 ]]
-                table = wandb.Table(
-                    columns=["Prompt", "Response", "Ground Truth", "Score", "Type"],
-                    data=table_data
-                )
-                wandb.log({"prompt_response_data": table})
-
-                #print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
+                wandb_tables_payload.append({
+                    "name": "prompt_response_data_low_score",
+                    "columns": table_columns,
+                    "data": table_data
+                })
                 
-            if scores[i] > max_score:
-                response_str = self.tokenizer.decode(data.batch["responses"][i][:length], skip_special_tokens=True)
-                prompt_str = self.tokenizer.decode(data.batch["prompts"][i], skip_special_tokens=True)
-                ground_truth = data[i].non_tensor_batch["reward_model"].get("ground_truth", None)
-                
-                # Log to wandb table
+            if numeric_reward_value > high_score_threshold:
                 table_data = [[
                     prompt_str,
                     response_str,
                     ground_truth,
-                    scores[i], 
+                    current_score,
                     "High"
                 ]]  
-                table = wandb.Table(
-                    columns=["Prompt", "Response", "Ground Truth", "Score", "Type"],
-                    data=table_data
-                )
-                wandb.log({"prompt_response_data": table}) 
-
-                #print(f"Prompt: {prompt_str}\nResponse: {response_str}\nGround Truth: {ground_truth}\nScore: {scores[i]}")
-                
-            
-
+                wandb_tables_payload.append({
+                    "name": "prompt_response_data_high_score",
+                    "columns": table_columns,
+                    "data": table_data
+                })
+                            
         data.batch["acc"] = torch.tensor(rewards, dtype=torch.float32, device=prompt_ids.device)
 
+        aggregated_batch_metrics = {}
+        if rewards: # Use numeric rewards for aggregation
+            rewards_tensor = torch.tensor(rewards, dtype=torch.float32)
+            aggregated_batch_metrics["batch_mean_reward"] = (
+                rewards_tensor.mean().item()
+            )
+            aggregated_batch_metrics["batch_min_reward"] = (
+                rewards_tensor.min().item()
+            )
+            aggregated_batch_metrics["batch_max_reward"] = (
+                rewards_tensor.max().item()
+            )
+            if len(rewards_tensor) > 1:
+                 aggregated_batch_metrics["batch_std_reward"] = (
+                     rewards_tensor.std().item()
+                 )
+            else:
+                aggregated_batch_metrics["batch_std_reward"] = 0.0
+
+
         if return_dict:
-            return {"reward_tensor": reward_tensor, "reward_extra_info": reward_extra_info}
+            # Prepare the dictionary to be returned
+            # with one key-value pair per line for readability
+            # and to avoid line length issues.
+            returned_data = {
+                "reward_tensor": reward_tensor,
+                "reward_extra_info": reward_extra_info,
+                "acc_tensor": data.batch["acc"],
+                "all_scores_list": scores,
+                "aggregated_batch_metrics": aggregated_batch_metrics,
+                "wandb_tables_payload": wandb_tables_payload,
+            }
+            return returned_data
         else:
             return reward_tensor
