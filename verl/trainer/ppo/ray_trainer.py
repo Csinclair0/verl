@@ -324,7 +324,7 @@ class RayPPOTrainer:
 
         # Initialize for cumulative W&B table logging
         self.cumulative_reward_samples_table = None
-        self.wandb_is_active_for_cumulative_tables = "wandb" in self.config.trainer.logger
+        self.wandb_is_active_for_cumulative_tables = True
         if self.wandb_is_active_for_cumulative_tables:
             try:
                 import wandb
@@ -1052,17 +1052,13 @@ class RayPPOTrainer:
                                     if table_payload.get("data"):
                                         for row_data in table_payload["data"]:
                                             # Prepend global_step to the row data
-                                            # Assumes row_data is [Prompt, Response, Ground Truth, Score, Type]
                                             self.cumulative_reward_samples_table.add_data(self.global_steps, *row_data)
                                     else:
                                         print(f"Skipping payload for table part '{table_payload.get('name')}' due to missing data.")
                                 
                                 # Log the updated cumulative table
-                                # Note: wandb.log itself is step-aware. If you log the same table object 
-                                # (by reference) multiple times, W&B typically versions it or shows the latest state at that step.
-                                # For a truly cumulative view that grows in the UI, logging the table object that grows in memory is the way.
-                                if self.cumulative_reward_samples_table.rows:
-                                    logger.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
+                                # No need to check .rows; an empty table can be logged or a table with previous data.
+                                logger.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
                             except Exception as e:
                                 print(f"Error processing or logging cumulative W&B table: {e}")
                         elif wandb_tables_payload: # Fallback or if cumulative was not initialized
