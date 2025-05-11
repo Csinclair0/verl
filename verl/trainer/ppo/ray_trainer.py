@@ -322,6 +322,23 @@ class RayPPOTrainer:
         self._validate_config()
         self._create_dataloader()
 
+        # Initialize for cumulative W&B table logging
+        self.cumulative_reward_samples_table = None
+        self.wandb_is_active_for_cumulative_tables = "wandb" in self.config.trainer.logger
+        if self.wandb_is_active_for_cumulative_tables:
+            try:
+                import wandb
+                # Define columns for the cumulative table. "Global Step" is added.
+                self.cumulative_table_columns = ["Global Step", "Prompt", "Response", "Ground Truth", "Score", "Type"]
+                self.cumulative_reward_samples_table = wandb.Table(columns=self.cumulative_table_columns)
+            except ImportError:
+                print("wandb could not be imported during trainer init. Cumulative table logging will be disabled.")
+                self.wandb_is_active_for_cumulative_tables = False
+            except Exception as e:
+                print(f"Error initializing cumulative W&B table in trainer init: {e}")
+                self.wandb_is_active_for_cumulative_tables = False
+                self.cumulative_reward_samples_table = None # Ensure it's None if init failed
+
     def _validate_config(self):
         config = self.config
         # number of GPUs total
@@ -1028,15 +1045,28 @@ class RayPPOTrainer:
                                     processed_extra_infos[k] = v_list 
                             batch.non_tensor_batch.update(processed_extra_infos)
 
-                        if wandb_tables_payload:
-                            if "wandb" in self.config.trainer.logger: 
+                        if self.wandb_is_active_for_cumulative_tables and self.cumulative_reward_samples_table is not None and wandb_tables_payload:
+                            try:
+                                # wandb should have been imported during __init__ if active
                                 for table_payload in wandb_tables_payload:
-                                    try:
-                                        import wandb
-                                        wandb_table = wandb.Table(columns=table_payload["columns"], data=table_payload["data"])
-                                        logger.log({table_payload["name"]: wandb_table}, step=self.global_steps)
-                                    except Exception as e:
-                                        print(f"Error creating or logging wandb.Table '{table_payload.get('name', 'unknown_table')}': {e}")
+                                    if table_payload.get("data"):
+                                        for row_data in table_payload["data"]:
+                                            # Prepend global_step to the row data
+                                            # Assumes row_data is [Prompt, Response, Ground Truth, Score, Type]
+                                            self.cumulative_reward_samples_table.add_data(self.global_steps, *row_data)
+                                    else:
+                                        print(f"Skipping payload for table part '{table_payload.get('name')}' due to missing data.")
+                                
+                                # Log the updated cumulative table
+                                # Note: wandb.log itself is step-aware. If you log the same table object 
+                                # (by reference) multiple times, W&B typically versions it or shows the latest state at that step.
+                                # For a truly cumulative view that grows in the UI, logging the table object that grows in memory is the way.
+                                if self.cumulative_reward_samples_table.rows:
+                                    logger.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
+                            except Exception as e:
+                                print(f"Error processing or logging cumulative W&B table: {e}")
+                        elif wandb_tables_payload: # Fallback or if cumulative was not initialized
+                            print("Cumulative W&B table logging is not active or table not initialized. Individual tables might not be logged either unless handled elsewhere.")
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
