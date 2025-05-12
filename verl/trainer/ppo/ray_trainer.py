@@ -1059,7 +1059,7 @@ class RayPPOTrainer:
                                 # Ensure wandb is imported if not already done in __init__ (though it should be if active)
                                 try:
                                     import wandb 
-                                    wandb.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
+                                    logger.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
                                 except ImportError:
                                     # This case should ideally be caught by wandb_is_active_for_cumulative_tables being false
                                     # or the table not being initialized, but as a safeguard:
