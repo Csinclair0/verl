@@ -1051,17 +1051,25 @@ class RayPPOTrainer:
                                 for table_payload in wandb_tables_payload:
                                     if table_payload.get("data"):
                                         for row_data in table_payload["data"]:
-                                            # Prepend global_step to the row data
                                             self.cumulative_reward_samples_table.add_data(self.global_steps, *row_data)
                                     else:
                                         print(f"Skipping payload for table part '{table_payload.get('name')}' due to missing data.")
                                 
-                                # Log the updated cumulative table
-                                # No need to check .rows; an empty table can be logged or a table with previous data.
-                                logger.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
-                            except Exception as e:
-                                print(f"Error processing or logging cumulative W&B table: {e}")
-                        elif wandb_tables_payload: # Fallback or if cumulative was not initialized
+                                # Log the updated cumulative table directly using wandb.log
+                                # Ensure wandb is imported if not already done in __init__ (though it should be if active)
+                                try:
+                                    import wandb 
+                                    wandb.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
+                                except ImportError:
+                                    # This case should ideally be caught by wandb_is_active_for_cumulative_tables being false
+                                    # or the table not being initialized, but as a safeguard:
+                                    print("wandb could not be imported for direct cumulative table logging.")
+                                except Exception as e_log:
+                                    print(f"Error during direct wandb.log of cumulative table: {e_log}")
+
+                            except Exception as e_process:
+                                print(f"Error processing data for cumulative W&B table: {e_process}")
+                        elif wandb_tables_payload:
                             print("Cumulative W&B table logging is not active or table not initialized. Individual tables might not be logged either unless handled elsewhere.")
 
                         # compute rewards. apply_kl_penalty if available
