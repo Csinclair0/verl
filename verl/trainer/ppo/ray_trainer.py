@@ -27,14 +27,14 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from pprint import pprint
-from typing import Dict, Type
+from typing import Dict, Optional, Type
 
 import numpy as np
 import ray
 import torch
 from codetiming import Timer
 from omegaconf import OmegaConf, open_dict
-from torch.utils.data import Dataset, RandomSampler, SequentialSampler
+from torch.utils.data import Dataset, Sampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
 
@@ -50,11 +50,12 @@ from verl.trainer.ppo.metric_utils import (
     compute_throughout_metrics,
     compute_timing_metrics,
     process_validation_metrics,
-    reduce_metrics,
 )
 from verl.trainer.ppo.reward import compute_reward, compute_reward_async
 from verl.utils.checkpoint.checkpoint_manager import find_latest_ckpt_path
-from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
+from verl.utils.metric import (
+    reduce_metrics,
+)
 from verl.utils.seqlen_balancing import get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.torch_functional import masked_mean
 from verl.utils.tracking import ValidationGenerationsLogger
@@ -279,6 +280,10 @@ class RayPPOTrainer:
         processor=None,
         reward_fn=None,
         val_reward_fn=None,
+        train_dataset: Optional[Dataset] = None,
+        val_dataset: Optional[Dataset] = None,
+        collate_fn=None,
+        train_sampler: Optional[Sampler] = None,
     ):
         # assert torch.cuda.is_available(), 'cuda must be available on driver'
 
@@ -320,7 +325,7 @@ class RayPPOTrainer:
             raise NotImplementedError
 
         self._validate_config()
-        self._create_dataloader()
+        self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
         # Initialize for cumulative W&B table logging
         self.cumulative_reward_samples_table = None
@@ -452,38 +457,25 @@ class RayPPOTrainer:
 
         print("[validate_config] All configuration checks passed successfully!")
 
-    def _create_dataloader(self):
+    def _create_dataloader(self, train_dataset, val_dataset, collate_fn, train_sampler):
         """
         Creates the train and validation dataloaders.
         """
-        # make sure the batch size is divisible by the dp size
-        from verl.utils.import_utils import load_extern_type
+        # TODO: we have to make sure the batch size is divisible by the dp size
+        from verl.trainer.main_ppo import create_rl_dataset, create_rl_sampler
 
-        if "custom_cls" in self.config.data and self.config.data.custom_cls.get("path", None) is not None:
-            # Dynamically load the custom dataset class specified in config
-            try:
-                dataset_cls = load_extern_type(self.config.data.custom_cls.path, self.config.data.custom_cls.name)
-                if not issubclass(dataset_cls, Dataset):
-                    raise TypeError(f"The custom dataset class '{self.config.data.custom_cls.name}' from '{self.config.data.custom_cls.path}' must inherit from torch.utils.data.Dataset")
-                print(f"Using custom dataset class: {dataset_cls.__name__}")
-            except Exception as e:
-                print(f"Error loading custom dataset class: {e}")
-                raise e
-        else:
-            dataset_cls = RLHFDataset
-            print(f"Using default dataset class: {dataset_cls.__name__}")
-        self.train_dataset = dataset_cls(
-            data_files=self.config.data.train_files,
-            tokenizer=self.tokenizer,
-            processor=self.processor,
-            config=self.config.data,
-        )
-        if self.config.data.shuffle:
-            train_dataloader_generator = torch.Generator()
-            train_dataloader_generator.manual_seed(self.config.data.get("seed", 1))
-            sampler = RandomSampler(data_source=self.train_dataset, generator=train_dataloader_generator)
-        else:
-            sampler = SequentialSampler(data_source=self.train_dataset)
+        if train_dataset is None:
+            train_dataset = create_rl_dataset(self.config.data.train_files, self.config.data, self.tokenizer, self.processor)
+        if val_dataset is None:
+            val_dataset = create_rl_dataset(self.config.data.val_files, self.config.data, self.tokenizer, self.processor)
+        self.train_dataset, self.val_dataset = train_dataset, val_dataset
+
+        if train_sampler is None:
+            train_sampler = create_rl_sampler(self.config.data, self.train_dataset)
+        if collate_fn is None:
+            from verl.utils.dataset.rl_dataset import collate_fn as default_collate_fn
+
+            collate_fn = default_collate_fn
 
         self.train_dataloader = StatefulDataLoader(
             dataset=self.train_dataset,
@@ -491,14 +483,7 @@ class RayPPOTrainer:
             num_workers=self.config.data.get("dataloader_num_workers", 8),
             drop_last=True,
             collate_fn=collate_fn,
-            sampler=sampler,
-        )
-
-        self.val_dataset = dataset_cls(
-            data_files=self.config.data.val_files,
-            tokenizer=self.tokenizer,
-            processor=self.processor,
-            config=self.config.data,
+            sampler=train_sampler,
         )
 
         val_batch_size = self.config.data.val_batch_size  # Prefer config value if set
@@ -742,7 +727,6 @@ class RayPPOTrainer:
         # Instead, directly pass different resource pool to different worker groups.
         # See https://github.com/volcengine/verl/blob/master/examples/ray/tutorial.ipynb for more information.
         all_wg = {}
-        self.wg_dicts = []
         wg_kwargs = {}  # Setting up kwargs for RayWorkerGroup
         if OmegaConf.select(self.config.trainer, "ray_wait_register_center_timeout") is not None:
             wg_kwargs["ray_wait_register_center_timeout"] = self.config.trainer.ray_wait_register_center_timeout
@@ -752,8 +736,6 @@ class RayPPOTrainer:
             wg_dict = self.ray_worker_group_cls(resource_pool=resource_pool, ray_cls_with_init=worker_dict_cls, **wg_kwargs)
             spawn_wg = wg_dict.spawn(prefix_set=class_dict.keys())
             all_wg.update(spawn_wg)
-            # keep the referece of WorkerDict to support ray >= 2.31. Ref: https://github.com/ray-project/ray/pull/45699
-            self.wg_dicts.append(wg_dict)
 
         if self.use_critic:
             self.critic_wg = all_wg["critic"]
@@ -903,6 +885,7 @@ class RayPPOTrainer:
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get("val_before_train", True):
             val_metrics = self._validate()
+            assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):

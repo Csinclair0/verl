@@ -47,8 +47,16 @@ def squeeze(x):
 
 
 def update_model_config(module_config, override_config_kwargs):
+    """Update the module config with the override_config_kwargs.
+    Args:
+        module_config: The module config from Huggingface Transformers.
+        override_config_kwargs: The kwargs to override the module config.
+    """
     for key, val in override_config_kwargs.items():
-        setattr(module_config, key, val)
+        if isinstance(val, dict):
+            update_model_config(getattr(module_config, key), val)
+        else:
+            setattr(module_config, key, val)
 
 
 def get_huggingface_actor_config(model_name: str, override_config_kwargs=None, trust_remote_code=False) -> Dict:
@@ -397,11 +405,15 @@ def pad_packed_inputs(unpad_tokens: torch.Tensor, cu_seqlens, max_seqlen_in_batc
 def load_mcore_dist_weights(parallel_model, dist_weight_path, is_value_model=False):
     from megatron.core import dist_checkpointing
     from megatron.core.dist_checkpointing.serialization import StrictHandling
+    from megatron.core.models.gpt.gpt_model import GPTModel
 
     # strict = StrictHandling.IGNORE_ALL if is_value_model else StrictHandling.ASSUME_OK_UNEXPECTED
     strict = StrictHandling.ASSUME_OK_UNEXPECTED
     for model in parallel_model:
-        ssd = model.module.module.sharded_state_dict()
+        if isinstance(model.module, GPTModel):
+            ssd = model.module.sharded_state_dict()
+        else:
+            ssd = model.module.module.sharded_state_dict()
         if is_value_model:
             for k in list(ssd.keys()):
                 if "output_layer" in k:
@@ -422,17 +434,21 @@ def get_parallel_gptmodel_from_config(tfconfig, hf_config, pre_process=None, pos
     if getattr(hf_config, 'rope_scaling', None) is not None:
         assert hf_config.rope_scaling['type'] == 'linear', "only linear scaling is supported for now"
         rope_scaling_args['seq_len_interpolation_factor'] = hf_config.rope_scaling['factor']
-    parallel_model = GPTModel(config=tfconfig,
-                              transformer_layer_spec=transformer_layer_spec,
-                              vocab_size=hf_config.vocab_size,
-                              max_sequence_length=hf_config.max_position_embeddings,
-                              pre_process=pre_process,
-                              post_process=post_process,
-                              share_embeddings_and_output_weights=share_embeddings_and_output_weights,
-                              position_embedding_type='rope',
-                              rotary_base=hf_config.rope_theta,
-                              **rope_scaling_args)
-    # # for layer in parallel_model.decoder.layers: layer.self_attention.core_attention.flash_attention.softmax_scale = None
+
+    parallel_model = GPTModel(
+        config=tfconfig,
+        transformer_layer_spec=transformer_layer_spec,
+        vocab_size=hf_config.vocab_size,
+        max_sequence_length=hf_config.max_position_embeddings,
+        pre_process=pre_process,
+        post_process=post_process,
+        share_embeddings_and_output_weights=share_embeddings_and_output_weights,
+        position_embedding_type="rope",
+        rotary_base=hf_config.rope_theta,
+        **rope_scaling_args,
+    )
+    # # for layer in parallel_model.decoder.layers:
+    # layer.self_attention.core_attention.flash_attention.softmax_scale = None
     if post_process and value:
         from verl.models.llama.megatron.layers.parallel_linear import LinearForLastLayer
 

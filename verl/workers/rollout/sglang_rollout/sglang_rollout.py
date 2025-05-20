@@ -37,7 +37,7 @@ import torch.distributed
 from omegaconf import DictConfig
 from sglang.srt.entrypoints.verl_engine import VerlEngine
 from sglang.srt.sampling.sampling_params import SamplingParams
-from sglang.srt.utils import broadcast_pyobj, get_ip, get_open_port
+from sglang.srt.utils import get_ip, get_open_port
 from tensordict import TensorDict
 from torch.distributed.device_mesh import init_device_mesh
 from torch.nn.utils.rnn import pad_sequence
@@ -48,6 +48,7 @@ from verl.utils.debug import GPUMemoryLogger
 from verl.utils.net_utils import is_ipv6
 from verl.utils.torch_functional import get_response_mask, pad_sequence_to_length
 from verl.workers.rollout.base import BaseRollout
+from verl.workers.rollout.sglang_rollout.utils import broadcast_pyobj
 
 if TYPE_CHECKING:
     from torch import nn
@@ -99,6 +100,7 @@ class SGLangRollout(BaseRollout):
         tokenizer,
         model_hf_config,
         port=None,
+        trust_remote_code: bool = False,
         **kwargs,
     ):
         """A SGLang rollout. It requires the module is supported by the SGLang.
@@ -112,6 +114,7 @@ class SGLangRollout(BaseRollout):
         """
         super().__init__()
         self.config = config
+        os.environ.setdefault("SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK", "true")
 
         assert not (not config.enforce_eager and config.free_cache_engine), "disable CUDA graph (enforce_eager = False) if free cache engine"
 
@@ -128,7 +131,6 @@ class SGLangRollout(BaseRollout):
                 tensor_model_parallel_size=tensor_parallel_size,
                 num_tp_per_train_tp=num_tp_per_train_tp,
             )
-
         assert model_hf_config.max_position_embeddings >= config.prompt_length + config.response_length, "model context length should be greater than total sequence length"
 
         tp_size = tensor_parallel_size
@@ -144,8 +146,9 @@ class SGLangRollout(BaseRollout):
         # device_mesh_device = init_device_mesh("cuda", **device_mesh_kwargs)
 
         # get tp_rank of this process in this tp group
-        tp_rank = device_mesh_cpu["tp"].get_local_rank()
+        rank = device_mesh_cpu.get_rank()
         visible_devices = [None] * device_mesh_cpu.size(1)
+
         torch.distributed.all_gather_object(visible_devices, os.environ["CUDA_VISIBLE_DEVICES"], device_mesh_cpu.get_group("tp"))
         visible_devices_set = set(",".join(visible_devices).split(","))
         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(sorted(list(visible_devices_set)))
@@ -156,7 +159,7 @@ class SGLangRollout(BaseRollout):
             port = get_open_port() if port is None else port
             [ip, port] = broadcast_pyobj(
                 [ip, port],
-                rank=tp_rank,
+                rank=rank,
                 dist_group=device_mesh_cpu.get_group("tp"),
                 src=device_mesh_cpu["tp"].mesh[0].item(),
                 force_cpu_device=False,
@@ -178,7 +181,11 @@ class SGLangRollout(BaseRollout):
             load_format=load_format,
             dist_init_addr=dist_init_addr,
             nnodes=nnodes,
-            # NOTE(Chenyang): if you want to debug the sglang engine
+            trust_remote_code=trust_remote_code,
+            # NOTE(linjunrong): add rank to prevent SGLang generate same port inside PortArgs.init_new
+            # when random.seed is being set during training
+            port=30000 + rank,
+            # NOTE(Chenyang): if you want to debug the SGLang engine output
             # please set the following parameters
             # Otherwise, it will make the engine run too slow
             # log_level="INFO",
@@ -318,8 +325,11 @@ class SGLangRollout(BaseRollout):
                 attention_mask = attention_mask.repeat_interleave(self.sampling_params["n"], dim=0)
                 position_ids = position_ids.repeat_interleave(self.sampling_params["n"], dim=0)
                 batch_size = batch_size * self.sampling_params["n"]
-                if "multi_modal_inputs" in non_tensor_batch.keys():
-                    non_tensor_batch["multi_modal_inputs"] = np.repeat(non_tensor_batch["multi_modal_inputs"], self.sampling_params["n"], axis=0)
+                _non_tensor_batch = {}
+                for key, val in non_tensor_batch.items():
+                    _non_tensor_batch[key] = np.repeat(val, self.sampling_params["n"], axis=0)
+            else:
+                _non_tensor_batch = non_tensor_batch
             seq = torch.cat([idx, response], dim=-1)
 
         response_length = response.size(1)
@@ -350,6 +360,15 @@ class SGLangRollout(BaseRollout):
 
         # free cache engine
         if self.config.free_cache_engine and self.inference_engine._engine is not None and self.inference_engine._engine.tokenizer_manager is not None:
-            self.inference_engine._engine.tokenizer_manager.flush_cache()
+            self.inference_engine._engine.flush_cache()
 
-        return DataProto(batch=batch, non_tensor_batch=non_tensor_batch)
+        return DataProto(batch=batch, non_tensor_batch=_non_tensor_batch)
+
+    # this function is left for uniform train-inference resharding
+    def update_weights(self, params_iter):
+        self.inference_engine.resume_memory_occupation()
+        self.inference_engine.update_weights_from_tensor(params_iter, load_format=None)
+
+    # this function is left for uniform train-inference resharding
+    def offload(self):
+        self.inference_engine.release_memory_occupation()
