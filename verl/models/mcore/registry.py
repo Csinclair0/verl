@@ -62,6 +62,8 @@ class SupportedModel(Enum):
     LLAMA4 = "Llama4ForConditionalGeneration"  # not tested
     QWEN3 = "Qwen3ForCausalLM"  # tested
     QWEN3_MOE = "Qwen3MoeForCausalLM"  # not tested
+    GEMMA3 = "Gemma3ForCausalLM"  # not tested
+    GEMMA3_GEN = "Gemma3ForConditionalGeneration"  # not tested
 
 
 # Registry for model configuration converters
@@ -75,6 +77,8 @@ MODEL_CONFIG_CONVERTER_REGISTRY: Dict[SupportedModel, Callable[[PretrainedConfig
     SupportedModel.LLAMA4: hf_to_mcore_config_llama4,
     SupportedModel.QWEN3: hf_to_mcore_config_dense,
     SupportedModel.QWEN3_MOE: hf_to_mcore_config_qwen3moe,
+    SupportedModel.GEMMA3: hf_to_mcore_config_dense,
+    SupportedModel.GEMMA3_GEN: hf_to_mcore_config_dense,
 }
 
 # Registry for model initializers
@@ -88,6 +92,8 @@ MODEL_INITIALIZER_REGISTRY: Dict[SupportedModel, Type[BaseModelInitializer]] = {
     SupportedModel.LLAMA4: DenseModel,
     SupportedModel.QWEN3: DenseModel,
     SupportedModel.QWEN3_MOE: Qwen3MoEModel,
+    SupportedModel.GEMMA3: DenseModel,
+    SupportedModel.GEMMA3_GEN: DenseModel,
 }
 
 # Registry for model forward functions
@@ -101,6 +107,8 @@ MODEL_FORWARD_REGISTRY: Dict[SupportedModel, Callable] = {
     SupportedModel.LLAMA4: gptmodel_forward,
     SupportedModel.QWEN3: gptmodel_forward,
     SupportedModel.QWEN3_MOE: gptmodel_forward,
+    SupportedModel.GEMMA3: gptmodel_forward,
+    SupportedModel.GEMMA3_GEN: gptmodel_forward,
 }
 
 # Registry for model weight converters
@@ -111,6 +119,8 @@ MODEL_WEIGHT_CONVERTER_REGISTRY: Dict[SupportedModel, Type] = {
     SupportedModel.MIXTRAL: McoreToHFWeightConverterMixtral,
     SupportedModel.QWEN3: McoreToHFWeightConverterDense,
     SupportedModel.QWEN3_MOE: McoreToHFWeightConverterQwen3Moe,
+    SupportedModel.GEMMA3: McoreToHFWeightConverterDense,
+    SupportedModel.GEMMA3_GEN: McoreToHFWeightConverterDense,
 }
 
 
