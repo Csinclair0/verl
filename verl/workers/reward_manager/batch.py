@@ -197,17 +197,6 @@ class BatchRewardManager:
 
 
         if return_dict:
-            # Prepare the dictionary to be returned
-            # with one key-value pair per line for readability
-            # and to avoid line length issues.
-            returned_data = {
-                "reward_tensor": reward_tensor,
-                "reward_extra_info": reward_extra_info,
-                "acc_tensor": data.batch["acc"],
-                "all_scores_list": scores,
-                "aggregated_batch_metrics": aggregated_batch_metrics,
-                "wandb_tables_payload": wandb_tables_payload,
-            }
-            return returned_data
+            return {"reward_tensor": reward_tensor, "reward_extra_info": reward_extra_info}
         else:
             return reward_tensor
