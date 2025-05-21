@@ -327,23 +327,6 @@ class RayPPOTrainer:
         self._validate_config()
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
-        # Initialize for cumulative W&B table logging
-        self.cumulative_reward_samples_table = None
-        self.wandb_is_active_for_cumulative_tables = True
-        if self.wandb_is_active_for_cumulative_tables:
-            try:
-                import wandb
-                # Define columns for the cumulative table. "Global Step" is added.
-                self.cumulative_table_columns = ["Global Step", "Prompt", "Response", "Ground Truth", "Score", "Type"]
-                self.cumulative_reward_samples_table = wandb.Table(columns=self.cumulative_table_columns)
-            except ImportError:
-                print("wandb could not be imported during trainer init. Cumulative table logging will be disabled.")
-                self.wandb_is_active_for_cumulative_tables = False
-            except Exception as e:
-                print(f"Error initializing cumulative W&B table in trainer init: {e}")
-                self.wandb_is_active_for_cumulative_tables = False
-                self.cumulative_reward_samples_table = None # Ensure it's None if init failed
-
     def _validate_config(self):
         config = self.config
         # number of GPUs total
@@ -964,17 +947,13 @@ class RayPPOTrainer:
                     with _timer("reward", timing_raw):
                         # compute reward model score
                         if self.use_rm:
-                            reward_tensor_rm_output = self.rm_wg.compute_rm_score(batch)
-                            batch = batch.union(reward_tensor_rm_output)
+                            reward_tensor = self.rm_wg.compute_rm_score(batch)
+                            batch = batch.union(reward_tensor)
 
                         if self.config.reward_model.launch_reward_fn_async:
-                            future_reward_dict = compute_reward_async.remote(batch, self.config, self.tokenizer)
-                            # Placeholder for sync result, will be overwritten if not async
-                            reward_dict_sync = None 
+                            future_reward = compute_reward_async.remote(batch, self.config, self.tokenizer)
                         else:
-                            reward_dict_sync = compute_reward(batch, self.reward_fn)
-                            # Placeholder for async future, will be overwritten if async
-                            future_reward_dict = None 
+                            reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
 
                     # recompute old_log_probs
                     with _timer("old_log_prob", timing_raw):
@@ -1002,58 +981,14 @@ class RayPPOTrainer:
 
                     with _timer("adv", timing_raw):
                         # we combine with rule-based rm
-                        
+                        reward_extra_infos_dict: dict[str, list]
                         if self.config.reward_model.launch_reward_fn_async:
-                            processed_reward_output = ray.get(future_reward_dict)
-                        else:
-                            processed_reward_output = reward_dict_sync
+                            reward_tensor, reward_extra_infos_dict = ray.get(future_reward)
+                        batch.batch["token_level_scores"] = reward_tensor
 
-                        # Extract components from the processed_reward_output dictionary
-                        reward_tensor = processed_reward_output.get("reward_tensor")
-                        reward_extra_infos_dict = processed_reward_output.get("reward_extra_info", {})
-                        acc_tensor = processed_reward_output.get("acc_tensor")
-                        # all_scores_list = processed_reward_output.get("all_scores_list", []) # Available if needed
-                        aggregated_rm_metrics = processed_reward_output.get("aggregated_batch_metrics", {})
-                        wandb_tables_payload = processed_reward_output.get("wandb_tables_payload", [])
-
-                        if reward_tensor is not None:
-                            batch.batch["token_level_scores"] = reward_tensor
-                        
+                        print(f"{list(reward_extra_infos_dict.keys())=}")
                         if reward_extra_infos_dict:
-                            processed_extra_infos = {}
-                            for k, v_list in reward_extra_infos_dict.items():
-                                try:
-                                    processed_extra_infos[k] = np.array(v_list)
-                                except ValueError:
-                                    processed_extra_infos[k] = v_list 
-                            batch.non_tensor_batch.update(processed_extra_infos)
-
-                        if self.wandb_is_active_for_cumulative_tables and self.cumulative_reward_samples_table is not None and wandb_tables_payload:
-                            try:
-                                # wandb should have been imported during __init__ if active
-                                for table_payload in wandb_tables_payload:
-                                    if table_payload.get("data"):
-                                        for row_data in table_payload["data"]:
-                                            self.cumulative_reward_samples_table.add_data(self.global_steps, *row_data)
-                                    else:
-                                        print(f"Skipping payload for table part '{table_payload.get('name')}' due to missing data.")
-                                
-                                # Log the updated cumulative table directly using wandb.log
-                                # Ensure wandb is imported if not already done in __init__ (though it should be if active)
-                                try:
-                                    import wandb 
-                                    logger.log({"all_time_reward_samples": self.cumulative_reward_samples_table}, step=self.global_steps)
-                                except ImportError:
-                                    # This case should ideally be caught by wandb_is_active_for_cumulative_tables being false
-                                    # or the table not being initialized, but as a safeguard:
-                                    print("wandb could not be imported for direct cumulative table logging.")
-                                except Exception as e_log:
-                                    print(f"Error during direct wandb.log of cumulative table: {e_log}")
-
-                            except Exception as e_process:
-                                print(f"Error processing data for cumulative W&B table: {e_process}")
-                        elif wandb_tables_payload:
-                            print("Cumulative W&B table logging is not active or table not initialized. Individual tables might not be logged either unless handled elsewhere.")
+                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
@@ -1127,11 +1062,6 @@ class RayPPOTrainer:
                         "training/epoch": epoch,
                     }
                 )
-                # Add aggregated metrics from reward manager to the main metrics dict
-                if aggregated_rm_metrics:
-                    for key, value in aggregated_rm_metrics.items():
-                        metrics[f"reward_manager/{key}"] = value
-                
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
