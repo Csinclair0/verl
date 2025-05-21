@@ -135,7 +135,7 @@ def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype) ->
         bf16=dtype is torch.bfloat16,
     )
     qkv_bias = True if "Qwen2ForCausalLM" in hf_config.architectures else getattr(hf_config, "attention_bias", False)
-    qk_layernorm = True if "Qwen3ForCausalLM" in hf_config.architectures else False
+    qk_layernorm = True if "Qwen3ForCausalLM" in hf_config.architectures or 'Gemma3ForCausalLM' in hf_config.architectures else False
 
     return _get_base_transformer_config(
         hf_config=hf_config,
