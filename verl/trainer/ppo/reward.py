@@ -107,42 +107,18 @@ def compute_reward(data: DataProto, reward_fn):
         data: DataProto object containing the input data.
         reward_fn: Reward function to compute the reward.
     Returns:
-        A dictionary containing reward_tensor, reward_extra_info, and potentially
-        other metrics like acc_tensor, all_scores_list, aggregated_batch_metrics,
-        and wandb_tables_payload if returned by the reward_fn.
+        Tuple of reward tensor and extra info dictionary.
     """
-    reward_output = {
-        "reward_tensor": None,
-        "reward_extra_info": {},
-        "acc_tensor": None,
-        "all_scores_list": [],
-        "aggregated_batch_metrics": {},
-        "wandb_tables_payload": []
-    }
     try:
-        # Assume reward_fn might be BatchRewardManager or a similar interface
-        # that returns a detailed dictionary when return_dict=True.
         reward_result = reward_fn(data, return_dict=True)
-        
-        reward_output["reward_tensor"] = reward_result.get("reward_tensor")
-        reward_output["reward_extra_info"] = reward_result.get("reward_extra_info", {})
-        reward_output["acc_tensor"] = reward_result.get("acc_tensor")
-        reward_output["all_scores_list"] = reward_result.get("all_scores_list", [])
-        reward_output["aggregated_batch_metrics"] = reward_result.get("aggregated_batch_metrics", {})
-        reward_output["wandb_tables_payload"] = reward_result.get("wandb_tables_payload", [])
-        
+        reward_tensor = reward_result["reward_tensor"]
+        reward_extra_infos_dict = reward_result["reward_extra_info"]
     except Exception as e:
-        print(f"Error in reward_fn when called with return_dict=True: {e}")
-        print("Falling back to calling reward_fn without return_dict.")
-        # Fallback: call reward_fn without return_dict, expecting only the tensor
-        try:
-            reward_tensor_fallback = reward_fn(data)
-            reward_output["reward_tensor"] = reward_tensor_fallback
-        except Exception as e_fallback:
-            print(f"Error in reward_fn fallback call: {e_fallback}")
-            # reward_tensor remains None if this also fails
+        print(f"Error in reward_fn: {e}")
+        reward_tensor = reward_fn(data)
+        reward_extra_infos_dict = {}
 
-    return reward_output
+    return reward_tensor, reward_extra_infos_dict
 
 
 @ray.remote(num_cpus=1)
