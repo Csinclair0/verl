@@ -80,9 +80,9 @@ class vLLMRollout(BaseRollout):
 
         # Log the tie_word_embeddings status
         if hasattr(model_hf_config, 'tie_word_embeddings'):
-            print(f"VERL_ROLLOUT: model_hf_config.tie_word_embeddings = {model_hf_config.tie_word_embeddings}")
+            logger.error(f"VERL_ROLLOUT_LOG: model_hf_config.tie_word_embeddings = {model_hf_config.tie_word_embeddings}")
         else:
-            print("VERL_ROLLOUT: model_hf_config does not have attribute tie_word_embeddings")
+            logger.error("VERL_ROLLOUT_LOG: model_hf_config does not have attribute tie_word_embeddings")
 
         tensor_parallel_size = self.config.get("tensor_model_parallel_size", 1)
         assert tensor_parallel_size <= torch.distributed.get_world_size(), "tensor parallel size should be less than or equal to the world size"
