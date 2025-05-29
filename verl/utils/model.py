@@ -64,6 +64,7 @@ def get_huggingface_actor_config(model_name: str, override_config_kwargs=None, t
         override_config_kwargs = {}
     assert isinstance(override_config_kwargs, Dict), f"override_config_kwargs must be a dict, got {type(override_config_kwargs)}"
     module_config = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+    print(f"module_config.tie_word_embeddings: {module_config.tie_word_embeddings}")
     update_model_config(module_config, override_config_kwargs)
 
     return module_config
@@ -326,6 +327,7 @@ def _load_hf_model(config, model_config, is_value_model, local_cache_path):
                 # device_map="auto", # disable auto device_map, the HF weight is only loaded to CPU in src_rank
                 # low_cpu_mem_usage=True
             )
+            print(f"model.config.tie_word_embeddings: {model.config.tie_word_embeddings}")
             state_dict = model.state_dict()
 
     return architectures, model, state_dict, is_value_model
