@@ -154,6 +154,7 @@ class vLLMRollout(BaseRollout):
             enable_prefix_caching=True,
             trust_remote_code=trust_remote_code,
             seed=config.get("seed", 0),
+            max_num_seqs=self.config.get("max_num_seqs"),
         )
 
         # Offload vllm model to reduce peak memory usage
