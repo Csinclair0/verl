@@ -236,7 +236,13 @@ def create_rl_sampler(data_config, dataset):
 
     # Use a sampler to facilitate checkpoint resumption.
     # If shuffling is enabled in the data configuration, create a random sampler.
-    if data_config.shuffle:
+    # If adarft is enabled, create a curriculum sampler
+    if data_config.adarft.enable:
+        from verl.trainer.ppo.custom_sampler import CurriculumSampler
+        sampler = CurriculumSampler(data_source=dataset, 
+                                    batch_size=data_config.train_batch_size, 
+                                    target_difficulty=0)
+    elif data_config.shuffle:
         train_dataloader_generator = torch.Generator()
         train_dataloader_generator.manual_seed(data_config.get("seed", 1))
         sampler = RandomSampler(data_source=dataset, generator=train_dataloader_generator)

@@ -261,6 +261,8 @@ class RLHFDataset(Dataset):
             logger.warning("tools_kwargs is empty for index {}, data source: {}", index, row_dict["data_source"])
         row_dict["index"] = index
         row_dict["tools_kwargs"] = tools_kwargs
+        difficulty = row_dict.get("extra_info", {}).get("difficulty", 0)
+        row_dict["difficulty"] = difficulty
         return row_dict
 
 

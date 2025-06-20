@@ -77,7 +77,7 @@ def _compute_response_info(batch: DataProto) -> Dict[str, Any]:
     )
 
 
-def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str, Any]:
+def compute_data_metrics(batch: DataProto, use_critic: bool = True, use_adarft: bool = False) -> Dict[str, Any]:
     """
     Computes various metrics from a batch of data for PPO training.
 
@@ -155,6 +155,9 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> Dict[str,
             if use_critic
             else {}
         ),
+        **({
+            'critic/target_difficulty': batch.meta_info.get('target_difficulty', float('nan')),
+        } if use_adarft else {}) ,
         # response length
         "response_length/mean": torch.mean(response_length).detach().item(),
         "response_length/max": torch.max(response_length).detach().item(),
