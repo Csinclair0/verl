@@ -16,7 +16,7 @@ from verl.utils.reward_score.token_alignment import (
 logger = logging.getLogger(__name__)
 
 INFER_URL = (
-    "http://mt-metrics.kubeflow-creator-services-translation.svc.cluster.local"
+    "http://tk-metric.kubeflow-creator-services-translation.svc.cluster.local"
     "/v2/models/metric_x_ft/infer"
 )
 
