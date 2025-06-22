@@ -239,9 +239,10 @@ def create_rl_sampler(data_config, dataset):
     # If adarft is enabled, create a curriculum sampler
     if data_config.adarft.enable:
         from verl.trainer.ppo.custom_sampler import CurriculumSampler
-        sampler = CurriculumSampler(data_source=dataset, 
-                                    batch_size=data_config.train_batch_size, 
-                                    target_difficulty=0)
+        sampler = CurriculumSampler(
+            data_source=dataset, 
+            target_difficulty=0
+        )
     elif data_config.shuffle:
         train_dataloader_generator = torch.Generator()
         train_dataloader_generator.manual_seed(data_config.get("seed", 1))

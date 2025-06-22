@@ -1073,18 +1073,6 @@ class RayPPOTrainer:
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
                             config=self.config.algorithm
                         )
-                        if self.config.data.adarft.enable:
-                            beta = self.config.data.adarft.beta
-                            alpha = self.config.data.adarft.alpha
-                            eta = self.config.data.adarft.eta
-                            d_min = self.config.data.adarft.d_min
-                            d_max = self.config.data.adarft.d_max
-                            sequence_reward = batch.batch['token_level_rewards'].sum(-1)
-                            current_reward = torch.mean(sequence_reward).detach().item()
-                            new_target_difficulty = self.sampler.target_difficulty + eta * np.tanh(alpha * (current_reward - beta))
-                            new_target_difficulty = np.clip(new_target_difficulty, d_min, d_max)
-                            self.sampler.update_target_difficulty(new_target_difficulty)
-                            batch.meta_info['target_difficulty'] = new_target_difficulty
 
                     # update critic
                     if self.use_critic:
@@ -1138,7 +1126,7 @@ class RayPPOTrainer:
                     }
                 )
                 # collect metrics
-                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic, use_adarft=self.config.data.adarft.enable))
+                metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()
