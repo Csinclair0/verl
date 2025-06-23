@@ -481,6 +481,20 @@ class RayPPOTrainer:
             train_sampler = create_rl_sampler(self.config.data, self.train_dataset)
         # Store reference to sampler for accessing target_difficulty in training loop
         self.train_sampler = train_sampler
+        
+        # Log curriculum sampler information for debugging
+        if self.config.data.adarft.enable:
+            if hasattr(train_sampler, 'target_difficulty'):
+                print(f"[CURRICULUM] Using {type(train_sampler).__name__} with target_difficulty={train_sampler.target_difficulty}")
+                if hasattr(train_sampler, 'difficulties'):
+                    difficulties = train_sampler.difficulties
+                    print(f"[CURRICULUM] Dataset difficulty range: [{difficulties.min():.3f}, {difficulties.max():.3f}], mean={difficulties.mean():.3f}, std={difficulties.std():.3f}")
+                    print(f"[CURRICULUM] Total samples: {len(difficulties)}")
+            else:
+                print(f"[CURRICULUM] Warning: adarft enabled but sampler {type(train_sampler).__name__} has no target_difficulty attribute")
+        else:
+            print(f"[CURRICULUM] Using standard sampler: {type(train_sampler).__name__}")
+            
         if collate_fn is None:
             from verl.utils.dataset.rl_dataset import collate_fn as default_collate_fn
 
@@ -924,6 +938,27 @@ class RayPPOTrainer:
                 # Inject target_difficulty into meta_info if using adarft curriculum learning
                 if self.config.data.adarft.enable and hasattr(self.train_sampler, 'target_difficulty'):
                     batch.meta_info["target_difficulty"] = self.train_sampler.target_difficulty
+                    
+                    # Log curriculum information periodically for debugging
+                    if self.global_steps % 10 == 1:  # Log every 10 steps starting from step 1
+                        print(f"[CURRICULUM STEP {self.global_steps}] Current target_difficulty: {self.train_sampler.target_difficulty}")
+                        
+                        # Try to log difficulty statistics of current batch if available
+                        if hasattr(self.train_sampler, 'difficulties') and 'data_indices' in batch.non_tensor_batch:
+                            try:
+                                batch_indices = batch.non_tensor_batch['data_indices']
+                                if hasattr(batch_indices, '__iter__'):
+                                    batch_difficulties = self.train_sampler.difficulties[batch_indices]
+                                    print(f"[CURRICULUM STEP {self.global_steps}] Batch difficulty stats: min={batch_difficulties.min():.3f}, max={batch_difficulties.max():.3f}, mean={batch_difficulties.mean():.3f}")
+                                    print(f"[CURRICULUM STEP {self.global_steps}] Samples selected within target±0.5: {((batch_difficulties >= self.train_sampler.target_difficulty - 0.5) & (batch_difficulties <= self.train_sampler.target_difficulty + 0.5)).sum()}/{len(batch_difficulties)}")
+                            except Exception as e:
+                                print(f"[CURRICULUM STEP {self.global_steps}] Could not extract batch difficulty stats: {e}")
+                        
+                        # Log if we have update methods available
+                        if hasattr(self.train_sampler, 'update_target_difficulty'):
+                            print(f"[CURRICULUM STEP {self.global_steps}] Sampler supports dynamic difficulty updates")
+                elif self.config.data.adarft.enable:
+                    print(f"[CURRICULUM STEP {self.global_steps}] Warning: adarft enabled but no target_difficulty available")
 
                 # pop those keys for generation
                 batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
@@ -1133,6 +1168,15 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic, use_adarft=self.config.data.adarft.enable))
+                
+                # Log curriculum metrics for debugging
+                if self.config.data.adarft.enable and 'critic/target_difficulty' in metrics:
+                    target_diff_metric = metrics['critic/target_difficulty']
+                    if not np.isnan(target_diff_metric) and self.global_steps % 10 == 1:
+                        print(f"[CURRICULUM METRICS] Successfully logged target_difficulty={target_diff_metric} in metrics")
+                elif self.config.data.adarft.enable and self.global_steps % 10 == 1:
+                    print(f"[CURRICULUM METRICS] Warning: target_difficulty not found in metrics or is NaN")
+                    
                 metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
                 # TODO: implement actual tflpo and theoretical tflpo
                 n_gpus = self.resource_pool_manager.get_n_gpus()

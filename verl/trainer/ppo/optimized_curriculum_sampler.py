@@ -196,15 +196,53 @@ class OptimizedCurriculumSampler(Sampler):
         diffs = np.abs(self.difficulties - self.target_difficulty)
         sorted_indices = np.argsort(diffs)
         
+        # Log curriculum sampling information
+        logger.info(f"[CURRICULUM ITER] Starting iteration with "
+                    f"target_difficulty={self.target_difficulty}")
+        
+        # Log statistics about how well the target matches available data
+        within_range_05 = ((self.difficulties >= self.target_difficulty - 0.5) & 
+                           (self.difficulties <= self.target_difficulty + 0.5)).sum()
+        within_range_10 = ((self.difficulties >= self.target_difficulty - 1.0) & 
+                           (self.difficulties <= self.target_difficulty + 1.0)).sum()
+        
+        logger.info(f"[CURRICULUM ITER] Samples within target±0.5: "
+                    f"{within_range_05}/{len(self.difficulties)} "
+                    f"({within_range_05/len(self.difficulties)*100:.1f}%)")
+        logger.info(f"[CURRICULUM ITER] Samples within target±1.0: "
+                    f"{within_range_10}/{len(self.difficulties)} "
+                    f"({within_range_10/len(self.difficulties)*100:.1f}%)")
+        
+        # Show closest and furthest difficulties that will be selected
+        closest_difficulties = self.difficulties[sorted_indices[:10]]  # First 10
+        furthest_difficulties = self.difficulties[sorted_indices[-10:]]  # Last 10
+        logger.info(f"[CURRICULUM ITER] Closest 10 difficulties: "
+                    f"{closest_difficulties}")
+        logger.info(f"[CURRICULUM ITER] Furthest 10 difficulties: "
+                    f"{furthest_difficulties}")
+        
         # Yield indices one by one (DataLoader will batch them)
         for idx in sorted_indices:
             yield int(idx)
     
     def update_target_difficulty(self, new_target: float):
         """Update the target difficulty dynamically."""
-        logger.info(f"Updating target difficulty from "
-                    f"{self.target_difficulty} to {new_target}")
+        old_target = self.target_difficulty
+        logger.info(f"[CURRICULUM UPDATE] Updating target difficulty from "
+                    f"{old_target} to {new_target} (delta: {new_target - old_target:+.3f})")
+        
         self.target_difficulty = new_target
+        
+        # Log how many samples are available near the new target
+        if hasattr(self, 'difficulties'):
+            within_range_05 = ((self.difficulties >= new_target - 0.5) & 
+                               (self.difficulties <= new_target + 0.5)).sum()
+            within_range_10 = ((self.difficulties >= new_target - 1.0) & 
+                               (self.difficulties <= new_target + 1.0)).sum()
+            
+            logger.info(f"[CURRICULUM UPDATE] New target coverage: "
+                        f"±0.5: {within_range_05}/{len(self.difficulties)} samples, "
+                        f"±1.0: {within_range_10}/{len(self.difficulties)} samples")
     
     def clear_cache(self):
         """Clear the difficulty cache."""
