@@ -467,6 +467,23 @@ class RayPPOTrainer:
     def _create_dataloader(self, train_dataset, val_dataset, collate_fn, train_sampler):
         """
         Creates the train and validation dataloaders.
+        
+        Curriculum Learning Configuration (when data.adarft.enable=True):
+        - beta: Target reward threshold for difficulty adjustment
+        - alpha: Sensitivity of difficulty adjustment to reward deviation  
+        - eta: Learning rate for difficulty updates
+        - d_min: Minimum difficulty level (default: 0.0)
+        - d_max: Maximum difficulty level (default: dataset max)
+        
+        Example config:
+        data:
+          adarft:
+            enable: true
+            beta: 0.5      # Target reward threshold
+            alpha: 1.0     # Sensitivity parameter
+            eta: 0.1       # Difficulty update learning rate
+            d_min: 0.0     # Minimum difficulty
+            d_max: 5.0     # Maximum difficulty
         """
         # TODO: we have to make sure the batch size is divisible by the dp size
         from verl.trainer.main_ppo import create_rl_dataset, create_rl_sampler
@@ -942,21 +959,7 @@ class RayPPOTrainer:
                     # Log curriculum information periodically for debugging
                     if self.global_steps % 10 == 1:  # Log every 10 steps starting from step 1
                         print(f"[CURRICULUM STEP {self.global_steps}] Current target_difficulty: {self.train_sampler.target_difficulty}")
-                        
-                        # Try to log difficulty statistics of current batch if available
-                        if hasattr(self.train_sampler, 'difficulties') and 'data_indices' in batch.non_tensor_batch:
-                            try:
-                                batch_indices = batch.non_tensor_batch['data_indices']
-                                if hasattr(batch_indices, '__iter__'):
-                                    batch_difficulties = self.train_sampler.difficulties[batch_indices]
-                                    print(f"[CURRICULUM STEP {self.global_steps}] Batch difficulty stats: min={batch_difficulties.min():.3f}, max={batch_difficulties.max():.3f}, mean={batch_difficulties.mean():.3f}")
-                                    print(f"[CURRICULUM STEP {self.global_steps}] Samples selected within target±0.5: {((batch_difficulties >= self.train_sampler.target_difficulty - 0.5) & (batch_difficulties <= self.train_sampler.target_difficulty + 0.5)).sum()}/{len(batch_difficulties)}")
-                            except Exception as e:
-                                print(f"[CURRICULUM STEP {self.global_steps}] Could not extract batch difficulty stats: {e}")
-                        
-                        # Log if we have update methods available
-                        if hasattr(self.train_sampler, 'update_target_difficulty'):
-                            print(f"[CURRICULUM STEP {self.global_steps}] Sampler supports dynamic difficulty updates")
+                
                 elif self.config.data.adarft.enable:
                     print(f"[CURRICULUM STEP {self.global_steps}] Warning: adarft enabled but no target_difficulty available")
 
@@ -1114,6 +1117,31 @@ class RayPPOTrainer:
                             multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
                             config=self.config.algorithm
                         )
+
+                    # Adaptive curriculum learning based on reward performance (original approach)
+                    if self.config.data.adarft.enable and hasattr(self.train_sampler, 'update_target_difficulty'):
+                        beta = self.config.data.adarft.beta
+                        alpha = self.config.data.adarft.alpha  
+                        eta = self.config.data.adarft.eta
+                        d_min = self.config.data.adarft.d_min
+                        d_max = self.config.data.adarft.d_max
+                        
+                        # Calculate current reward performance
+                        sequence_reward = batch.batch['token_level_rewards'].sum(-1)
+                        current_reward = torch.mean(sequence_reward).detach().item()
+                        
+                        # Adaptive difficulty update using hyperbolic tangent
+                        old_target = self.train_sampler.target_difficulty
+                        new_target_difficulty = old_target + eta * np.tanh(alpha * (current_reward - beta))
+                        new_target_difficulty = np.clip(new_target_difficulty, d_min, d_max)
+                        
+                        # Update sampler and log the change
+                        if abs(new_target_difficulty - old_target) > 1e-6:  # Only update if meaningful change
+                            print(f"[CURRICULUM ADAPTIVE] Step {self.global_steps}: Reward={current_reward:.3f}, Target difficulty {old_target:.3f} -> {new_target_difficulty:.3f}")
+                            self.train_sampler.update_target_difficulty(new_target_difficulty)
+                        
+                        # Store target difficulty in batch meta_info for logging
+                        batch.meta_info['target_difficulty'] = new_target_difficulty
 
                     # update critic
                     if self.use_critic:
