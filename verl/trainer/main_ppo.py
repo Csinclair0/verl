@@ -12,14 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-Note that we don't combine the main with ray_trainer as ray_trainer is used by other main.
+Note that we don't combine the main with ray_trainer as ray_trainer 
+is used by other main.
 """
 
 import hydra
 import ray
+import logging
 
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.trainer.ppo.reward import load_reward_manager
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 @hydra.main(config_path="config", config_name="ppo_trainer", version_base=None)
@@ -31,6 +37,7 @@ def main(config):
 def run_ppo(config) -> None:
     # Check if Ray is not initialized
     if not ray.is_initialized():
+        logger.info("Initializing Ray cluster...")
         # Initialize Ray with a local cluster configuration
         # Set environment variables in the runtime environment to control tokenizer parallelism,
         # NCCL debug level, VLLM logging level, and allow runtime LoRA updating
@@ -39,10 +46,13 @@ def run_ppo(config) -> None:
             runtime_env={"env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN", "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "true"}},
             num_cpus=config.ray_init.num_cpus,
         )
+        logger.info("Ray cluster initialized successfully")
 
     # Create a remote instance of the TaskRunner class, and
     # Execute the `run` method of the TaskRunner instance remotely and wait for it to complete
+    logger.info("Creating TaskRunner instance...")
     runner = TaskRunner.remote()
+    logger.info("Starting TaskRunner.run() remotely...")
     ray.get(runner.run.remote(config))
 
     # [Optional] get the path of the timeline trace file from the configuration, default to None
@@ -62,20 +72,25 @@ class TaskRunner:
 
         from verl.utils.fs import copy_to_local
 
+        logger.info("TaskRunner.run() started")
         pprint(OmegaConf.to_container(config, resolve=True))
         OmegaConf.resolve(config)
 
         # Download the checkpoint from HDFS to the local machine.
         # `use_shm` determines whether to use shared memory, which could lead to faster model loading if turned on
+        logger.info("Downloading model checkpoint...")
         local_path = copy_to_local(config.actor_rollout_ref.model.path, use_shm=config.actor_rollout_ref.model.get("use_shm", False))
+        logger.info(f"Model checkpoint downloaded to: {local_path}")
 
         # Instantiate the tokenizer and processor.
         from verl.utils import hf_processor, hf_tokenizer
 
+        logger.info("Loading tokenizer and processor...")
         trust_remote_code = config.data.get("trust_remote_code", False)
         tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
         # Used for multimodal LLM, could be None
         processor = hf_processor(local_path, trust_remote_code=trust_remote_code, use_fast=True)
+        logger.info("Tokenizer and processor loaded successfully")
 
         # Version validation for vllm.
         if config.actor_rollout_ref.rollout.name in ["vllm"]:
@@ -86,6 +101,7 @@ class TaskRunner:
                     raise NotImplementedError("PPO LoRA is not supported before vllm 0.7.3")
 
         # Define worker classes based on the actor strategy.
+        logger.info("Setting up worker classes...")
         if config.actor_rollout_ref.actor.strategy in ["fsdp", "fsdp2"]:
             assert config.critic.strategy in ["fsdp", "fsdp2"]
             from verl.single_controller.ray import RayWorkerGroup
@@ -146,18 +162,26 @@ class TaskRunner:
             mapping[Role.RefPolicy] = global_pool_id
 
         # Load the reward manager for training and validation.
+        logger.info("Loading reward managers...")
         reward_fn = load_reward_manager(config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {}))
         val_reward_fn = load_reward_manager(config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {}))
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
+        logger.info("Reward managers loaded successfully")
 
         from verl.utils.dataset.rl_dataset import collate_fn
 
         # Create training and validation datasets.
+        logger.info("Creating datasets...")
         train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor)
         val_dataset = create_rl_dataset(config.data.val_files, config.data, tokenizer, processor)
+        logger.info("Datasets created successfully")
+
+        logger.info("Creating sampler...")
         train_sampler = create_rl_sampler(config.data, train_dataset)
+        logger.info("Sampler created successfully")
 
         # Initialize the PPO trainer.
+        logger.info("Initializing PPO trainer...")
         trainer = RayPPOTrainer(
             config=config,
             tokenizer=tokenizer,
@@ -173,9 +197,15 @@ class TaskRunner:
             train_sampler=train_sampler,
             device_name=config.trainer.device,
         )
+        logger.info("PPO trainer initialized successfully")
+
         # Initialize the workers of the trainer.
+        logger.info("Initializing trainer workers...")
         trainer.init_workers()
+        logger.info("Trainer workers initialized successfully")
+
         # Start the training process.
+        logger.info("Starting training process...")
         trainer.fit()
 
 
@@ -238,10 +268,11 @@ def create_rl_sampler(data_config, dataset):
     # If shuffling is enabled in the data configuration, create a random sampler.
     # If adarft is enabled, create a curriculum sampler
     if data_config.adarft.enable:
-        from verl.trainer.ppo.custom_sampler import CurriculumSampler
-        sampler = CurriculumSampler(
+        from verl.trainer.ppo.optimized_curriculum_sampler import OptimizedCurriculumSampler
+        sampler = OptimizedCurriculumSampler(
             data_source=dataset, 
-            target_difficulty=0
+            target_difficulty=0,
+            cache_dir=data_config.adarft.cache_dir
         )
     elif data_config.shuffle:
         train_dataloader_generator = torch.Generator()
