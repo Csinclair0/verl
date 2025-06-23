@@ -35,7 +35,8 @@ def reduce_metrics(metrics: Dict[str, List[Any]]) -> Dict[str, Any]:
         metrics: A dictionary mapping metric names to lists of metric values.
 
     Returns:
-        A dictionary with the same keys but with each list replaced by its mean value.
+        A dictionary with the same keys but with each list replaced by its 
+        mean value.
 
     Example:
         >>> metrics = {"loss": [1.0, 2.0, 3.0], "accuracy": [0.8, 0.9, 0.7]}
@@ -108,8 +109,11 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, use_adarft: 
 
     max_response_length = batch.batch["responses"].shape[-1]
 
-    prompt_mask = batch.batch["attention_mask"][:, :-max_response_length].bool()
-    response_mask = batch.batch["attention_mask"][:, -max_response_length:].bool()
+    prompt_mask = batch.batch["attention_mask"][:, :-max_response_length]
+    response_mask = batch.batch["attention_mask"][:, -max_response_length:]
+    
+    prompt_mask = prompt_mask.bool()
+    response_mask = response_mask.bool()
 
     max_prompt_length = prompt_mask.size(-1)
 
@@ -120,6 +124,10 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, use_adarft: 
     valid_adv = torch.masked_select(advantages, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
 
+    # Initialize variables for critic metrics to avoid undefined variable error
+    return_diff_var = torch.tensor(0.0)
+    return_var = torch.tensor(1.0)
+    
     if use_critic:
         values = batch.batch["values"]
         valid_values = torch.masked_select(values, response_mask)
@@ -150,24 +158,32 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, use_adarft: 
                 "critic/values/max": torch.max(valid_values).detach().item(),
                 "critic/values/min": torch.min(valid_values).detach().item(),
                 # vf explained var
-                "critic/vf_explained_var": (1.0 - return_diff_var / (return_var + 1e-5)).detach().item(),
+                "critic/vf_explained_var": (
+                    1.0 - return_diff_var / (return_var + 1e-5)
+                ).detach().item(),
             }
             if use_critic
             else {}
         ),
         **({
-            'critic/target_difficulty': batch.meta_info.get('target_difficulty', float('nan')),
-        } if use_adarft else {}) ,
+            'critic/target_difficulty': batch.meta_info.get(
+                'target_difficulty', float('nan')
+            ),
+        } if use_adarft else {}),
         # response length
         "response_length/mean": torch.mean(response_length).detach().item(),
         "response_length/max": torch.max(response_length).detach().item(),
         "response_length/min": torch.min(response_length).detach().item(),
-        "response_length/clip_ratio": torch.mean(torch.eq(response_length, max_response_length).float()).detach().item(),
+        "response_length/clip_ratio": torch.mean(
+            torch.eq(response_length, max_response_length).float()
+        ).detach().item(),
         # prompt length
         "prompt_length/mean": torch.mean(prompt_length).detach().item(),
         "prompt_length/max": torch.max(prompt_length).detach().item(),
         "prompt_length/min": torch.min(prompt_length).detach().item(),
-        "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
+        "prompt_length/clip_ratio": torch.mean(
+            torch.eq(prompt_length, max_prompt_length).float()
+        ).detach().item(),
     }
     return metrics
 

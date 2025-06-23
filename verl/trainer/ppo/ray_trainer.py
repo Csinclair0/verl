@@ -479,6 +479,8 @@ class RayPPOTrainer:
 
         if train_sampler is None:
             train_sampler = create_rl_sampler(self.config.data, self.train_dataset)
+        # Store reference to sampler for accessing target_difficulty in training loop
+        self.train_sampler = train_sampler
         if collate_fn is None:
             from verl.utils.dataset.rl_dataset import collate_fn as default_collate_fn
 
@@ -918,6 +920,10 @@ class RayPPOTrainer:
                 metrics = {}
                 timing_raw = {}
                 batch: DataProto = DataProto.from_single_dict(batch_dict)
+
+                # Inject target_difficulty into meta_info if using adarft curriculum learning
+                if self.config.data.adarft.enable and hasattr(self.train_sampler, 'target_difficulty'):
+                    batch.meta_info["target_difficulty"] = self.train_sampler.target_difficulty
 
                 # pop those keys for generation
                 batch_keys_to_pop = ["input_ids", "attention_mask", "position_ids"]
