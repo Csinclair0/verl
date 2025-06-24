@@ -1,20 +1,8 @@
 import numpy as np
 import logging
 from typing import Any
+from torch.utils.data import Sampler
 
-try:
-    from torch.utils.data import Sampler
-except ImportError:
-    # Fallback for environments without torch
-    class Sampler:
-        def __init__(self, data_source):
-            pass
-        
-        def __iter__(self):
-            raise NotImplementedError
-        
-        def __len__(self):
-            raise NotImplementedError
 
 logger = logging.getLogger(__name__)
 
