@@ -269,9 +269,13 @@ def create_rl_sampler(data_config, dataset):
     # If adarft is enabled, create a curriculum sampler
     if data_config.adarft.enable:
         from verl.trainer.ppo.optimized_curriculum_sampler import OptimizedCurriculumSampler
+        
+        # Allow configurable initial target difficulty, with sensible default
+        initial_target = data_config.adarft.get("initial_target_difficulty", 0)
+        
         sampler = OptimizedCurriculumSampler(
             data_source=dataset, 
-            target_difficulty=0,
+            target_difficulty=initial_target,
             cache_dir=data_config.adarft.cache_dir
         )
     elif data_config.shuffle:
