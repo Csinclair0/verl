@@ -91,6 +91,15 @@ class OptimizedCurriculumSampler(Sampler):
                 # Verify cache is valid
                 if len(difficulties) == len(self.data_source):
                     logger.info("Successfully loaded cached difficulties")
+                    # Debug: Show what we loaded
+                    logger.info(f"[DEBUG] Loaded difficulty stats: "
+                                f"min={difficulties.min():.3f}, "
+                                f"max={difficulties.max():.3f}, "
+                                f"mean={difficulties.mean():.3f}, "
+                                f"std={difficulties.std():.3f}")
+                    unique_values = np.unique(difficulties)
+                    logger.info(f"[DEBUG] Unique difficulty values (first 20): "
+                                f"{unique_values[:20]}")
                     return difficulties
                 else:
                     logger.warning("Cached difficulties length mismatch, "
@@ -103,6 +112,20 @@ class OptimizedCurriculumSampler(Sampler):
         logger.info("Computing difficulties (this may take a while for "
                     "large datasets)...")
         difficulties = self._compute_difficulties_efficiently()
+        
+        # Debug: Show what we computed
+        logger.info(f"[DEBUG] Computed difficulty stats: "
+                    f"min={difficulties.min():.3f}, "
+                    f"max={difficulties.max():.3f}, "
+                    f"mean={difficulties.mean():.3f}, "
+                    f"std={difficulties.std():.3f}")
+        unique_values = np.unique(difficulties)
+        logger.info(f"[DEBUG] Unique difficulty values (first 20): "
+                    f"{unique_values[:20]}")
+        if len(unique_values) == 1:
+            logger.warning(f"[DEBUG] ALL SAMPLES HAVE SAME DIFFICULTY: "
+                           f"{unique_values[0]} - Curriculum learning will "
+                           f"not work!")
         
         # Cache the results
         try:
@@ -192,6 +215,10 @@ class OptimizedCurriculumSampler(Sampler):
         return np.array(difficulties)
     
     def __iter__(self):
+        # Debug: Check if this method is being called at all
+        logger.info(f"[DEBUG] OptimizedCurriculumSampler.__iter__() called! "
+                    f"target_difficulty={self.target_difficulty}")
+        
         # Sort indices by how close they are to target difficulty
         diffs = np.abs(self.difficulties - self.target_difficulty)
         sorted_indices = np.argsort(diffs)
