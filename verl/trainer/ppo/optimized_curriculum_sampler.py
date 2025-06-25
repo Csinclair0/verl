@@ -9,17 +9,19 @@ logger = logging.getLogger(__name__)
 
 class OptimizedCurriculumSampler(Sampler):
     """
-    A simple curriculum sampler that selects samples based on difficulty.
+    A curriculum sampler that selects batches based on difficulty.
+    Yields batches (lists) of indices rather than individual indices.
     """
     
     def __init__(self, data_source: Any, target_difficulty: float, 
-                 cache_dir: str = None):
+                 cache_dir: str = None, batch_size: int = 32):
         self.data_source = data_source
         self.target_difficulty = target_difficulty
+        self.batch_size = batch_size
         self.num_samples = len(data_source)
         
-        logger.info(f"Initializing SimpleCurriculumSampler with "
-                    f"{self.num_samples} samples")
+        logger.info(f"Initializing CurriculumSampler with "
+                    f"{self.num_samples} samples, batch_size={batch_size}")
         
         # Extract difficulty levels from dataset
         logger.info("Extracting difficulties from dataset...")
@@ -32,12 +34,14 @@ class OptimizedCurriculumSampler(Sampler):
         
         # Debug: Show difficulty distribution
         unique_values = np.unique(self.difficulties)
-        logger.info(f"[DEBUG] Found {len(unique_values)} unique difficulty values")
+        logger.info(f"[DEBUG] Found {len(unique_values)} unique difficulty "
+                    f"values")
         logger.info(f"[DEBUG] First 10 values: {unique_values[:10]}")
         
         if len(unique_values) == 1:
             logger.warning(f"[DEBUG] ALL SAMPLES HAVE SAME DIFFICULTY: "
-                           f"{unique_values[0]} - Curriculum learning will not work!")
+                           f"{unique_values[0]} - Curriculum learning will "
+                           f"not work!")
     
     def _extract_difficulties(self):
         """Extract difficulty values from the dataset."""
@@ -67,7 +71,7 @@ class OptimizedCurriculumSampler(Sampler):
     
     def __iter__(self):
         # Debug: Check if this method is being called
-        logger.info(f"[DEBUG] OptimizedCurriculumSampler.__iter__() CALLED! "
+        logger.info(f"[DEBUG] CurriculumSampler.__iter__() CALLED! "
                     f"target_difficulty={self.target_difficulty}")
         
         # Sort indices by how close they are to target difficulty
@@ -79,10 +83,10 @@ class OptimizedCurriculumSampler(Sampler):
                     f"target_difficulty={self.target_difficulty}")
         
         # Log statistics about how well the target matches available data
-        within_range_05 = ((self.difficulties >= self.target_difficulty - 0.5) & 
-                           (self.difficulties <= self.target_difficulty + 0.5)).sum()
-        within_range_10 = ((self.difficulties >= self.target_difficulty - 1.0) & 
-                           (self.difficulties <= self.target_difficulty + 1.0)).sum()
+        within_range_05 = np.sum((self.difficulties >= self.target_difficulty - 0.5) & 
+                                 (self.difficulties <= self.target_difficulty + 0.5))
+        within_range_10 = np.sum((self.difficulties >= self.target_difficulty - 1.0) & 
+                                 (self.difficulties <= self.target_difficulty + 1.0))
         
         logger.info(f"[CURRICULUM ITER] Samples within target±0.5: "
                     f"{within_range_05}/{len(self.difficulties)} "
@@ -99,9 +103,10 @@ class OptimizedCurriculumSampler(Sampler):
         logger.info(f"[CURRICULUM ITER] Furthest 10 difficulties: "
                     f"{furthest_difficulties}")
         
-        # Yield indices one by one (DataLoader will batch them)
-        for idx in sorted_indices:
-            yield int(idx)
+        # Yield batches of indices (like reference implementation)
+        for i in range(0, len(sorted_indices), self.batch_size):
+            batch_indices = sorted_indices[i:i + self.batch_size]
+            yield [int(idx) for idx in batch_indices]
     
     def update_target_difficulty(self, new_target: float):
         """Update the target difficulty dynamically."""
@@ -113,17 +118,19 @@ class OptimizedCurriculumSampler(Sampler):
         self.target_difficulty = new_target
         
         # Log how many samples are available near the new target
-        within_range_05 = ((self.difficulties >= new_target - 0.5) & 
-                           (self.difficulties <= new_target + 0.5)).sum()
-        within_range_10 = ((self.difficulties >= new_target - 1.0) & 
-                           (self.difficulties <= new_target + 1.0)).sum()
+        within_range_05 = np.sum((self.difficulties >= new_target - 0.5) & 
+                                 (self.difficulties <= new_target + 0.5))
+        within_range_10 = np.sum((self.difficulties >= new_target - 1.0) & 
+                                 (self.difficulties <= new_target + 1.0))
         
         logger.info(f"[CURRICULUM UPDATE] New target coverage: "
-                    f"±0.5: {within_range_05}/{len(self.difficulties)} samples, "
-                    f"±1.0: {within_range_10}/{len(self.difficulties)} samples")
+                    f"±0.5: {within_range_05}/{len(self.difficulties)} "
+                    f"samples, ±1.0: {within_range_10}/"
+                    f"{len(self.difficulties)} samples")
     
     def __len__(self):
-        return self.num_samples
+        # Return number of batches, not number of samples
+        return (self.num_samples + self.batch_size - 1) // self.batch_size
 
 
 def create_optimized_curriculum_sampler(data_source: Any, 

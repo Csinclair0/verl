@@ -273,11 +273,19 @@ def create_rl_sampler(data_config, dataset):
         # Allow configurable initial target difficulty, with sensible default
         initial_target = data_config.adarft.get("initial_target_difficulty", 0)
         
+        # Get batch size for curriculum sampler (it's now a BatchSampler)
+        batch_size = data_config.get("gen_batch_size", data_config.train_batch_size)
+        
         sampler = OptimizedCurriculumSampler(
             data_source=dataset, 
             target_difficulty=initial_target,
-            cache_dir=data_config.adarft.cache_dir
+            cache_dir=data_config.adarft.cache_dir,
+            batch_size=batch_size
         )
+        
+        # NOTE: This is now a BatchSampler. The DataLoader needs to use:
+        # batch_sampler=sampler instead of sampler=sampler
+        # and should NOT specify batch_size parameter
     elif data_config.shuffle:
         train_dataloader_generator = torch.Generator()
         train_dataloader_generator.manual_seed(data_config.get("seed", 1))
