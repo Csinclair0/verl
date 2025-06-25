@@ -10,7 +10,7 @@ class CurriculumSampler(Sampler):
         # Extract difficulty levels from dataset
         self.difficulties = np.array([data_source[i]['difficulty'] for i in range(len(data_source))])
         self.sorted_indices = np.argsort(self.difficulties)
-        
+        print(f"Initialied with Difficulties: {self.difficulties[:10]}")
     def __iter__(self):
         num_samples = len(self.data_source)
         batch = []
@@ -24,11 +24,13 @@ class CurriculumSampler(Sampler):
     
     def _select_closest_to_target(self):
         # Compute the absolute difference from target difficulty for each sample
-        diffs = np.abs(self.difficulties - self.target_difficulty)
+        ### add a random noise to the difficulties
+        difficulties = self.difficulties + np.random.normal(0, 0.1, len(self.difficulties))
+        diffs = np.abs(difficulties - self.target_difficulty)
         print(f"Differences: {diffs[:10]}")
         # Get the indices of samples sorted by how close they are to the target difficulty
         closest_indices = np.argsort(diffs)
-        print(f"Closest indices: {closest_indices}")
+        print(f"Closest indices: {closest_indices[:10]}")
         # Select the top-N closest samples
         selected_indices = []
         for idx in closest_indices:
@@ -41,6 +43,7 @@ class CurriculumSampler(Sampler):
     
     def update_target_difficulty(self, new_target):
         """Update the target difficulty dynamically based on model feedback."""
+        print(f"Updating target difficulty to {new_target}")
         self.target_difficulty = new_target
 
     def __len__(self):
