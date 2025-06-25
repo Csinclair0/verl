@@ -1,5 +1,7 @@
 import numpy as np
 import logging
+import pickle
+import os
 from typing import Any
 from torch.utils.data import Sampler
 
@@ -11,6 +13,7 @@ class OptimizedCurriculumSampler(Sampler):
     """
     A curriculum sampler that selects batches based on difficulty.
     Yields batches (lists) of indices rather than individual indices.
+    Optimized with caching and efficient extraction.
     """
     
     def __init__(self, data_source: Any, target_difficulty: float, 
@@ -19,13 +22,20 @@ class OptimizedCurriculumSampler(Sampler):
         self.target_difficulty = target_difficulty
         self.batch_size = batch_size
         self.num_samples = len(data_source)
+        self.cache_dir = cache_dir or "/tmp/verl_curriculum_cache"
         
         logger.info(f"Initializing CurriculumSampler with "
                     f"{self.num_samples} samples, batch_size={batch_size}")
         
-        # Extract difficulty levels from dataset
-        logger.info("Extracting difficulties from dataset...")
-        self.difficulties = self._extract_difficulties()
+        # Create cache directory if it doesn't exist
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        # Generate cache key based on dataset properties
+        cache_key = self._generate_cache_key()
+        self.cache_file = os.path.join(self.cache_dir, f"{cache_key}.pkl")
+        
+        # Load or compute difficulties (with caching optimization)
+        self.difficulties = self._load_or_compute_difficulties()
         
         logger.info(f"Curriculum sampler initialized. "
                     f"Difficulty range: [{self.difficulties.min():.3f}, "
@@ -43,24 +53,111 @@ class OptimizedCurriculumSampler(Sampler):
                            f"{unique_values[0]} - Curriculum learning will "
                            f"not work!")
     
-    def _extract_difficulties(self):
-        """Extract difficulty values from the dataset."""
+    def _generate_cache_key(self):
+        """Generate a unique cache key for the dataset."""
+        # Use dataset length and some sample data to create a hash
+        key_data = f"{len(self.data_source)}"
+        
+        # Add data file paths if available
+        if hasattr(self.data_source, 'data_files'):
+            key_data += f"_{hash(str(self.data_source.data_files))}"
+        
+        return abs(hash(key_data))
+    
+    def _load_or_compute_difficulties(self):
+        """Load cached difficulties or compute if cache doesn't exist."""
+        if os.path.exists(self.cache_file):
+            logger.info(f"Loading cached difficulties from {self.cache_file}")
+            try:
+                with open(self.cache_file, 'rb') as f:
+                    difficulties = pickle.load(f)
+                
+                # Verify cache is valid
+                if len(difficulties) == len(self.data_source):
+                    logger.info("Successfully loaded cached difficulties")
+                    return difficulties
+                else:
+                    logger.warning("Cached difficulties length mismatch, "
+                                   "recomputing...")
+            except Exception as e:
+                logger.warning(f"Failed to load cached difficulties: {e}, "
+                               "recomputing...")
+        
+        # Compute difficulties and cache them
+        logger.info("Computing difficulties (this may take a while for "
+                    "large datasets)...")
+        difficulties = self._extract_difficulties_efficiently()
+        
+        # Cache the results
+        try:
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(difficulties, f)
+            logger.info(f"Cached difficulties to {self.cache_file}")
+        except Exception as e:
+            logger.warning(f"Failed to cache difficulties: {e}")
+        
+        return difficulties
+    
+    def _extract_difficulties_efficiently(self):
+        """Extract difficulty values efficiently to avoid retokenization."""
         difficulties = []
         
-        logger.info("Extracting difficulties using direct access...")
+        # Method 1: Try direct dataframe access (fastest - no retokenization)
+        if hasattr(self.data_source, 'dataframe'):
+            try:
+                logger.info("Attempting fast dataframe difficulty extraction")
+                df = self.data_source.dataframe
+                
+                # Process in chunks to manage memory
+                chunk_size = 10000
+                for i in range(0, len(df), chunk_size):
+                    end_idx = min(i + chunk_size, len(df))
+                    chunk_difficulties = []
+                    
+                    for j in range(i, end_idx):
+                        try:
+                            # Try different ways to access difficulty
+                            item = df[j]
+                            if isinstance(item, dict):
+                                difficulty = item.get('difficulty', 0)
+                            else:
+                                # Try extra_info field
+                                extra_info = item.get('extra_info', {})
+                                if isinstance(extra_info, str):
+                                    import json
+                                    try:
+                                        extra_info = json.loads(extra_info)
+                                    except (json.JSONDecodeError, ValueError):
+                                        extra_info = {}
+                                difficulty = extra_info.get('difficulty', 0)
+                            chunk_difficulties.append(difficulty)
+                        except Exception:
+                            chunk_difficulties.append(0)
+                    
+                    difficulties.extend(chunk_difficulties)
+                    
+                    # Log progress
+                    if i % 50000 == 0:
+                        logger.info(f"Processed {end_idx}/{len(df)} items")
+                
+                logger.info("Successfully extracted difficulties from dataframe")
+                return np.array(difficulties)
+                
+            except Exception as e:
+                logger.warning(f"Dataframe method failed: {e}")
+        
+        # Method 2: Fallback - direct access (may retokenize)
+        logger.warning("Using fallback __getitem__ method - may be slow")
         for i in range(len(self.data_source)):
             try:
                 item = self.data_source[i]
-                # Try to get difficulty from the item
                 if isinstance(item, dict):
                     difficulty = item.get('difficulty', 0)
                 else:
-                    # If item has difficulty attribute
                     difficulty = getattr(item, 'difficulty', 0)
                 difficulties.append(difficulty)
             except Exception as e:
-                logger.warning(f"Error extracting difficulty for item {i}: {e}, "
-                               f"using default 0")
+                logger.warning(f"Error extracting difficulty for item {i}: {e}")
                 difficulties.append(0)
             
             # Log progress every 10000 items
