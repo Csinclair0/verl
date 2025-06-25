@@ -517,14 +517,31 @@ class RayPPOTrainer:
 
             collate_fn = default_collate_fn
 
-        self.train_dataloader = StatefulDataLoader(
-            dataset=self.train_dataset,
-            batch_size=self.config.data.get("gen_batch_size", self.config.data.train_batch_size),
-            num_workers=self.config.data.get("dataloader_num_workers", 8),
-            drop_last=True,
-            collate_fn=collate_fn,
-            sampler=train_sampler,
-        )
+        # Configure DataLoader based on sampler type
+        if (self.config.data.adarft.enable and 
+            hasattr(train_sampler, '__iter__')):
+            # Curriculum sampler is a BatchSampler - yields batches directly
+            # Use batch_sampler instead of sampler and don't specify batch_size
+            self.train_dataloader = StatefulDataLoader(
+                dataset=self.train_dataset,
+                batch_sampler=train_sampler,
+                num_workers=self.config.data.get("dataloader_num_workers", 8),
+                drop_last=True,
+                collate_fn=collate_fn,
+            )
+        else:
+            # Regular sampler - use normal configuration
+            batch_size = self.config.data.get(
+                "gen_batch_size", self.config.data.train_batch_size
+            )
+            self.train_dataloader = StatefulDataLoader(
+                dataset=self.train_dataset,
+                batch_size=batch_size,
+                num_workers=self.config.data.get("dataloader_num_workers", 8),
+                drop_last=True,
+                collate_fn=collate_fn,
+                sampler=train_sampler,
+            )
 
         val_batch_size = self.config.data.val_batch_size  # Prefer config value if set
         if val_batch_size is None:
