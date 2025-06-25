@@ -526,7 +526,7 @@ class RayPPOTrainer:
                 dataset=self.train_dataset,
                 batch_sampler=train_sampler,
                 num_workers=self.config.data.get("dataloader_num_workers", 8),
-                drop_last=True,
+                #drop_last=True,
                 collate_fn=collate_fn,
             )
         else:

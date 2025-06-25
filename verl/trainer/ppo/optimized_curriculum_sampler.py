@@ -6,6 +6,7 @@ from typing import Any
 from torch.utils.data import Sampler
 
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
