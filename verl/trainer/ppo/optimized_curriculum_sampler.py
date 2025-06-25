@@ -18,15 +18,18 @@ class OptimizedCurriculumSampler(Sampler):
     """
     
     def __init__(self, data_source: Any, target_difficulty: float, 
-                 cache_dir: str = None, batch_size: int = 32):
+                 cache_dir: str = None, batch_size: int = 32, 
+                 mini_epoch_size: int = 50):
         self.data_source = data_source
         self.target_difficulty = target_difficulty
         self.batch_size = batch_size
+        self.mini_epoch_size = mini_epoch_size  # Number of batches per mini-epoch
         self.num_samples = len(data_source)
         self.cache_dir = cache_dir or "/tmp/verl_curriculum_cache"
         
         logger.info(f"Initializing CurriculumSampler with "
-                    f"{self.num_samples} samples, batch_size={batch_size}")
+                    f"{self.num_samples} samples, batch_size={batch_size}, "
+                    f"mini_epoch_size={mini_epoch_size}")
         
         # Create cache directory if it doesn't exist
         os.makedirs(self.cache_dir, exist_ok=True)
@@ -201,10 +204,24 @@ class OptimizedCurriculumSampler(Sampler):
         logger.info(f"[CURRICULUM ITER] Furthest 10 difficulties: "
                     f"{furthest_difficulties}")
         
-        # Yield batches of indices (like reference implementation)
-        for i in range(0, len(sorted_indices), self.batch_size):
-            batch_indices = sorted_indices[i:i + self.batch_size]
-            yield [int(idx) for idx in batch_indices]
+        # Yield only mini_epoch_size batches at a time
+        # This allows target_difficulty updates to take effect more frequently
+        batches_yielded = 0
+        batch_start = 0
+        
+        while batches_yielded < self.mini_epoch_size and batch_start < len(sorted_indices):
+            # Yield one batch
+            batch_end = min(batch_start + self.batch_size, len(sorted_indices))
+            batch_indices = sorted_indices[batch_start:batch_end]
+            
+            if len(batch_indices) > 0:  # Only yield non-empty batches
+                yield [int(idx) for idx in batch_indices]
+                batches_yielded += 1
+            
+            batch_start = batch_end
+        
+        logger.info(f"[CURRICULUM ITER] Yielded {batches_yielded} batches "
+                    f"for mini-epoch (target_difficulty={self.target_difficulty})")
     
     def update_target_difficulty(self, new_target: float):
         """Update the target difficulty dynamically."""
@@ -227,8 +244,8 @@ class OptimizedCurriculumSampler(Sampler):
                     f"{len(self.difficulties)} samples")
     
     def __len__(self):
-        # Return number of batches, not number of samples
-        return (self.num_samples + self.batch_size - 1) // self.batch_size
+        # Return number of batches per mini-epoch, not total batches
+        return self.mini_epoch_size
 
 
 def create_optimized_curriculum_sampler(data_source: Any, 

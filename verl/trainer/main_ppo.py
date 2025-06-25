@@ -269,6 +269,7 @@ def create_rl_sampler(data_config, dataset):
     # If adarft is enabled, create a curriculum sampler
     if data_config.adarft.enable:
         from verl.trainer.ppo.optimized_curriculum_sampler import OptimizedCurriculumSampler
+        from verl.trainer.ppo.custom_sampler import CurriculumSampler
         
         # Allow configurable initial target difficulty, with sensible default
         initial_target = data_config.adarft.get("initial_target_difficulty", 0)
@@ -276,10 +277,10 @@ def create_rl_sampler(data_config, dataset):
         # Get batch size for curriculum sampler (it's now a BatchSampler)
         batch_size = data_config.get("gen_batch_size", data_config.train_batch_size)
         
-        sampler = OptimizedCurriculumSampler(
+        sampler = CurriculumSampler(
             data_source=dataset, 
             target_difficulty=initial_target,
-            cache_dir=data_config.adarft.cache_dir,
+            #cache_dir=data_config.adarft.cache_dir,
             batch_size=batch_size
         )
         
