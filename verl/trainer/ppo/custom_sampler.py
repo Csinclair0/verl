@@ -25,7 +25,7 @@ class CurriculumSampler(Sampler):
     def _select_closest_to_target(self):
         # Compute the absolute difference from target difficulty for each sample
         diffs = np.abs(self.difficulties - self.target_difficulty)
-        
+        print(f"Differences: {diffs[:10]}")
         # Get the indices of samples sorted by how close they are to the target difficulty
         closest_indices = np.argsort(diffs)
         print(f"Closest indices: {closest_indices}")
