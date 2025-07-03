@@ -59,6 +59,7 @@ class SupportedModel(Enum):
     QWEN2 = "Qwen2ForCausalLM"  # tested
     QWEN2_MOE = "Qwen2MoeForCausalLM"  # pending
     DEEPSEEK_V3 = "DeepseekV3ForCausalLM"  # not tested
+    MISTRAL = "MistralForCausalLM"  # not tested
     MIXTRAL = "MixtralForCausalLM"  # tested
     QWEN2_5_VL = "Qwen2_5_VLForConditionalGeneration"  # not supported
     LLAMA4 = "Llama4ForConditionalGeneration"  # not tested
@@ -75,6 +76,7 @@ MODEL_CONFIG_CONVERTER_REGISTRY: Dict[SupportedModel, Callable[[PretrainedConfig
     SupportedModel.QWEN2_MOE: hf_to_mcore_config_qwen2moe,
     SupportedModel.DEEPSEEK_V3: hf_to_mcore_config_dpskv3,
     SupportedModel.MIXTRAL: hf_to_mcore_config_mixtral,
+    SupportedModel.MISTRAL: hf_to_mcore_config_dense,
     SupportedModel.QWEN2_5_VL: hf_to_mcore_config_qwen2_5_vl,
     SupportedModel.LLAMA4: hf_to_mcore_config_llama4,
     SupportedModel.QWEN3: hf_to_mcore_config_dense,
@@ -88,6 +90,7 @@ MODEL_INITIALIZER_REGISTRY: Dict[SupportedModel, Type[BaseModelInitializer]] = {
     SupportedModel.LLAMA: DenseModel,
     SupportedModel.QWEN2: DenseModel,
     SupportedModel.QWEN2_MOE: Qwen2MoEModel,
+    SupportedModel.MISTRAL: DenseModel,
     SupportedModel.MIXTRAL: MixtralModel,
     SupportedModel.DEEPSEEK_V3: DeepseekV3Model,
     SupportedModel.QWEN2_5_VL: Qwen25VLModel,
@@ -103,6 +106,7 @@ MODEL_FORWARD_REGISTRY: Dict[SupportedModel, Callable] = {
     SupportedModel.LLAMA: gptmodel_forward,
     SupportedModel.QWEN2: gptmodel_forward,
     SupportedModel.QWEN2_MOE: gptmodel_forward,
+    SupportedModel.MISTRAL: gptmodel_forward,
     SupportedModel.MIXTRAL: gptmodel_forward,
     SupportedModel.DEEPSEEK_V3: gptmodel_forward,
     SupportedModel.QWEN2_5_VL: gptmodel_forward,
@@ -119,6 +123,7 @@ MODEL_WEIGHT_CONVERTER_REGISTRY: Dict[SupportedModel, Type] = {
     SupportedModel.LLAMA: McoreToHFWeightConverterDense,
     SupportedModel.QWEN2: McoreToHFWeightConverterDense,
     SupportedModel.QWEN2_MOE: McoreToHFWeightConverterQwen2Moe,
+    SupportedModel.MISTRAL: McoreToHFWeightConverterDense,
     SupportedModel.MIXTRAL: McoreToHFWeightConverterMixtral,
     SupportedModel.DEEPSEEK_V3: McoreToHFWeightConverterDpskv3,
     SupportedModel.QWEN3: McoreToHFWeightConverterDense,
