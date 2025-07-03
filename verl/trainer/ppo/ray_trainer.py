@@ -923,6 +923,55 @@ class RayPPOTrainer:
         global_balance_stats = log_seqlen_unbalance(seqlen_list=global_seqlen_lst, partitions=global_partition_lst, prefix=logging_prefix)
         metrics.update(global_balance_stats)
 
+    def _update_language_curriculum(self, batch):
+        """Update language-specific difficulties based on batch performance."""
+        # Extract language information from batch
+        batch_languages = []
+        
+        if 'extra_info' in batch.non_tensor_batch:
+            extra_infos = batch.non_tensor_batch['extra_info']
+            
+            for extra_info in extra_infos:
+                if isinstance(extra_info, str):
+                    import json
+                    try:
+                        extra_info_dict = json.loads(extra_info)
+                    except (json.JSONDecodeError, ValueError):
+                        extra_info_dict = {}
+                elif isinstance(extra_info, dict):
+                    extra_info_dict = extra_info
+                else:
+                    extra_info_dict = {}
+                
+                language = extra_info_dict.get('tgt', 'unknown')
+                batch_languages.append(language)
+        else:
+            print(f"[LANG-CURRICULUM WARNING] No extra_info in batch at step {self.global_steps}")
+            return
+        
+        if not batch_languages:
+            print(f"[LANG-CURRICULUM WARNING] No languages extracted from batch at step {self.global_steps}")
+            return
+        
+        # Update per-language difficulties
+        sequence_rewards = batch.batch['token_level_rewards'].sum(-1)
+        self.train_sampler.update_language_difficulties(sequence_rewards, batch_languages)
+        
+        # Store current language difficulties in meta_info for metrics
+        batch.meta_info['language_difficulties'] = dict(self.train_sampler.get_language_difficulties())
+        
+        # Store batch languages for metrics computation
+        batch.meta_info['batch_languages'] = batch_languages
+        
+        # Log language distribution in current batch
+        if self.global_steps % 10 == 1:
+            from collections import Counter
+            lang_counts = Counter(batch_languages)
+            total = len(batch_languages)
+            ratios_str = ", ".join([f"{lang}: {count}/{total} ({count/total:.1%})" 
+                                   for lang, count in lang_counts.items()])
+            print(f"[LANG-CURRICULUM STEP {self.global_steps}] Batch composition: {ratios_str}")
+
     def fit(self):
         """
         The training loop of PPO.
@@ -1137,6 +1186,7 @@ class RayPPOTrainer:
 
                     # Adaptive curriculum learning based on reward performance (original approach)
                     if self.config.data.adarft.enable and hasattr(self.train_sampler, 'update_target_difficulty'):
+                        # EXISTING: Regular curriculum learning
                         beta = self.config.data.adarft.beta
                         alpha = self.config.data.adarft.alpha  
                         eta = self.config.data.adarft.eta
@@ -1159,6 +1209,10 @@ class RayPPOTrainer:
                         
                         # Store target difficulty in batch meta_info for logging
                         batch.meta_info['target_difficulty'] = new_target_difficulty
+                    
+                    elif self.config.data.adarft.enable and hasattr(self.train_sampler, 'update_language_difficulties'):
+                        # NEW: Language-aware curriculum learning
+                        self._update_language_curriculum(batch)
 
                     # update critic
                     if self.use_critic:

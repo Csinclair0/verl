@@ -78,6 +78,49 @@ def _compute_response_info(batch: DataProto) -> Dict[str, Any]:
     )
 
 
+def _compute_language_curriculum_metrics(batch: DataProto) -> Dict[str, Any]:
+    """Compute language-aware curriculum metrics if available."""
+    metrics = {}
+    
+    # Add per-language target difficulties if available
+    if 'language_difficulties' in batch.meta_info:
+        lang_difficulties = batch.meta_info['language_difficulties']
+        for lang, difficulty in lang_difficulties.items():
+            metrics[f'curriculum/{lang}/target_difficulty'] = difficulty
+    
+    # Add per-language reward statistics if language info available
+    if 'batch_languages' in batch.meta_info:
+        from collections import defaultdict
+        
+        languages = batch.meta_info['batch_languages']
+        sequence_rewards = batch.batch['token_level_rewards'].sum(-1)
+        
+        # Group rewards by language
+        lang_rewards = defaultdict(list)
+        for reward, lang in zip(sequence_rewards, languages):
+            lang_rewards[lang].append(reward.item())
+        
+        # Compute statistics for each language
+        for lang, rewards in lang_rewards.items():
+            if rewards:  # Only compute if we have samples
+                metrics.update({
+                    f'curriculum/{lang}/reward_mean': np.mean(rewards),
+                    f'curriculum/{lang}/reward_std': np.std(rewards) if len(rewards) > 1 else 0.0,
+                    f'curriculum/{lang}/reward_min': np.min(rewards),
+                    f'curriculum/{lang}/reward_max': np.max(rewards),
+                    f'curriculum/{lang}/sample_count': len(rewards),
+                })
+        
+        # Add batch composition metrics
+        from collections import Counter
+        lang_counts = Counter(languages)
+        total_samples = len(languages)
+        for lang, count in lang_counts.items():
+            metrics[f'curriculum/{lang}/batch_ratio'] = count / total_samples
+    
+    return metrics
+
+
 def compute_data_metrics(batch: DataProto, use_critic: bool = True, use_adarft: bool = False) -> Dict[str, Any]:
     """
     Computes various metrics from a batch of data for PPO training.
@@ -170,6 +213,8 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, use_adarft: 
                 'target_difficulty', float('nan')
             ),
         } if use_adarft else {}),
+        # Add language-aware curriculum metrics if available
+        **(_compute_language_curriculum_metrics(batch) if use_adarft else {}),
         # response length
         "response_length/mean": torch.mean(response_length).detach().item(),
         "response_length/max": torch.max(response_length).detach().item(),

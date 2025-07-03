@@ -268,22 +268,75 @@ def create_rl_sampler(data_config, dataset):
     # If shuffling is enabled in the data configuration, create a random sampler.
     # If adarft is enabled, create a curriculum sampler
     if data_config.adarft.enable:
-        from verl.trainer.ppo.optimized_curriculum_sampler import OptimizedCurriculumSampler
-        from verl.trainer.ppo.custom_sampler import CurriculumSampler
-        
-        # Allow configurable initial target difficulty, with sensible default
-        initial_target = data_config.adarft.get("initial_target_difficulty", 0)
-        
-        # Get batch size for curriculum sampler (it's now a BatchSampler)
-        batch_size = data_config.get("gen_batch_size", data_config.train_batch_size)
-        
-        sampler = CurriculumSampler(
-            data_source=dataset, 
-            target_difficulty=initial_target,
-            #cache_dir=data_config.adarft.cache_dir,
-            batch_size=batch_size
-        )
-        
+        if data_config.adarft.get('language_aware', False):
+            # NEW: Language-aware curriculum sampler
+            from verl.trainer.ppo.language_curriculum_sampler import (
+                LanguageCurriculumSampler
+            )
+            
+            # Validate required configuration
+            if not hasattr(data_config.adarft, 'language_ratios'):
+                error_msg = (
+                    "language_ratios must be specified for language-aware "
+                    "curriculum learning"
+                )
+                raise ValueError(error_msg)
+            if not hasattr(data_config.adarft, 'language_target_rewards'):
+                error_msg = (
+                    "language_target_rewards must be specified for "
+                    "language-aware curriculum learning"
+                )
+                raise ValueError(error_msg)
+            
+            batch_size = data_config.get(
+                "gen_batch_size", data_config.train_batch_size
+            )
+            
+            initial_diffs = data_config.adarft.get(
+                'initial_language_difficulties', None
+            )
+            mini_epoch_size = data_config.adarft.get('mini_epoch_size', 50)
+            
+            sampler = LanguageCurriculumSampler(
+                data_source=dataset,
+                batch_size=batch_size,
+                language_ratios=data_config.adarft.language_ratios,
+                language_target_rewards=data_config.adarft.language_target_rewards,
+                initial_difficulties=initial_diffs,
+                alpha=data_config.adarft.alpha,
+                eta=data_config.adarft.eta,
+                d_min=data_config.adarft.d_min,
+                d_max=data_config.adarft.d_max,
+                mini_epoch_size=mini_epoch_size
+            )
+            
+            ratios = data_config.adarft.language_ratios
+            targets = data_config.adarft.language_target_rewards
+            print(f"[LANG-CURRICULUM] Created sampler with ratios: {ratios}")
+            print(f"[LANG-CURRICULUM] Target rewards: {targets}")
+            
+        else:
+            # EXISTING: Regular curriculum sampler
+            from verl.trainer.ppo.optimized_curriculum_sampler import (
+                OptimizedCurriculumSampler
+            )
+            from verl.trainer.ppo.custom_sampler import CurriculumSampler
+            
+            # Allow configurable initial target difficulty, with sensible default
+            initial_target = data_config.adarft.get("initial_target_difficulty", 0)
+            
+            # Get batch size for curriculum sampler (it's now a BatchSampler)
+            batch_size = data_config.get(
+                "gen_batch_size", data_config.train_batch_size
+            )
+            
+            sampler = CurriculumSampler(
+                data_source=dataset, 
+                target_difficulty=initial_target,
+                #cache_dir=data_config.adarft.cache_dir,
+                batch_size=batch_size
+            )
+            
         # NOTE: This is now a BatchSampler. The DataLoader needs to use:
         # batch_sampler=sampler instead of sampler=sampler
         # and should NOT specify batch_size parameter

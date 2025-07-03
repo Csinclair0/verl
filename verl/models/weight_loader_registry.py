@@ -40,6 +40,7 @@ def get_weight_saver(arch: str):
     _MODEL_WEIGHT_MEGATRON_SAVER_REGISTRY = {
         "LlamaForCausalLM": merge_megatron_ckpt_gptmodel,
         "Qwen2ForCausalLM": merge_megatron_ckpt_gptmodel,
+        "MistralForCausalLM": merge_megatron_ckpt_gptmodel,
         "MixtralForCausalLM": merge_megatron_ckpt_gptmodel_mixtral,
         "Qwen2MoeForCausalLM": merge_megatron_ckpt_gptmodel_qwen_moe,
         "DeepseekV3ForCausalLM": merge_megatron_ckpt_gptmodel_dpskv3,
