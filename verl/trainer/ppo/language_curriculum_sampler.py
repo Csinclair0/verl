@@ -216,7 +216,7 @@ class LanguageCurriculumSampler(Sampler):
         """Infinite iterator that yields batches continuously."""
         while True:  # Infinite loop instead of mini-epoch logic
             # Check if we have language-aware mode or simple curriculum mode
-            if hasattr(self, 'target_difficulty'):
+            if hasattr(self, '_target_difficulty'):
                 # Simple curriculum mode - sort by single target difficulty
                 diffs = np.abs(self.difficulties - self.target_difficulty)
                 sorted_indices = np.argsort(diffs)
@@ -332,7 +332,21 @@ class LanguageCurriculumSampler(Sampler):
     
     def update_target_difficulty(self, new_target: float):
         """Update target difficulty for simple curriculum mode."""
-        self.target_difficulty = new_target
+        self._target_difficulty = new_target
+    
+    @property
+    def target_difficulty(self):
+        """Return representative target difficulty for backward compatibility."""
+        if hasattr(self, '_target_difficulty'):
+            return self._target_difficulty
+        else:
+            # For language-aware mode, return mean of all language difficulties
+            return float(np.mean(list(self.language_difficulties.values())))
+    
+    @target_difficulty.setter
+    def target_difficulty(self, value):
+        """Set target difficulty for simple curriculum mode."""
+        self._target_difficulty = value
     
     def get_language_stats(self) -> Dict[str, Dict[str, Any]]:
         """Get statistics about each language in the dataset."""
