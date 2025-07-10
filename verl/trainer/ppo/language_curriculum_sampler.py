@@ -255,29 +255,44 @@ class LanguageCurriculumSampler(Sampler):
             reverse=True
         )
         
+        print(f"[DEBUG] Allocating batch_size={self.batch_size} across {len(sorted_langs)} languages")
+        
         for lang, ratio in sorted_langs[:-1]:
             allocated = int(self.batch_size * ratio)
             available = len(self.language_indices[lang])
             allocated = min(allocated, remaining_batch, available)
             allocations[lang] = allocated
             remaining_batch -= allocated
+            print(f"[DEBUG] {lang}: ratio={ratio:.4f}, calculated={int(self.batch_size * ratio)}, available={available}, allocated={allocated}, remaining={remaining_batch}")
         
         # Give remainder to last language
         last_lang = sorted_langs[-1][0]
         available = len(self.language_indices[last_lang])
         allocations[last_lang] = min(remaining_batch, available)
+        print(f"[DEBUG] {last_lang} (last): available={available}, allocated={allocations[last_lang]}, final_remaining={remaining_batch}")
+        
+        total_allocated = sum(allocations.values())
+        print(f"[DEBUG] Total allocated: {total_allocated}/{self.batch_size}")
         
         return allocations
     
     def _sample_from_language(self, language: str, n_samples: int) -> List[int]:
         """Sample n_samples from a specific language based on its target difficulty."""
+        if n_samples <= 0:
+            print(f"[DEBUG] {language}: n_samples={n_samples}, returning empty list")
+            return []
+            
         target_difficulty = self.language_difficulties[language]
         sorted_indices = self.language_sorted_indices[language]
         
+        print(f"[DEBUG] Sampling {n_samples} from {language}: target_difficulty={target_difficulty:.3f}, available_indices={len(sorted_indices)}")
+        
         if len(sorted_indices) == 0:
+            print(f"[DEBUG] {language}: No sorted indices available")
             return []
         
         if n_samples >= len(sorted_indices):
+            print(f"[DEBUG] {language}: Requesting more samples than available, returning all {len(sorted_indices)}")
             return sorted_indices.tolist()
         
         # Find samples closest to target difficulty for this language
@@ -293,6 +308,7 @@ class LanguageCurriculumSampler(Sampler):
             closest_indices = np.argsort(noisy_diffs)[:n_samples]
         
         selected_indices = sorted_indices[closest_indices]
+        print(f"[DEBUG] {language}: Selected {len(selected_indices)} indices")
         return selected_indices.tolist()
     
     def update_language_difficulties(self, batch_rewards: torch.Tensor, 
