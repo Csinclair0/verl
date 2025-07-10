@@ -245,33 +245,47 @@ class LanguageCurriculumSampler(Sampler):
     
     def _allocate_batch_by_language(self) -> Dict[str, int]:
         """Determine how many samples to take from each language."""
-        allocations = {}
+        allocations = {lang: 0 for lang in self.language_ratios.keys()}
+        
+        print(f"[DEBUG] Allocating batch_size={self.batch_size} across {len(self.language_ratios)} languages")
+        
+        # First pass: Calculate base allocations using floor
         remaining_batch = self.batch_size
-        
-        # Sort languages by ratio (largest first) for better allocation
-        sorted_langs = sorted(
-            self.language_ratios.items(), 
-            key=lambda x: x[1], 
-            reverse=True
-        )
-        
-        print(f"[DEBUG] Allocating batch_size={self.batch_size} across {len(sorted_langs)} languages")
-        
-        for lang, ratio in sorted_langs[:-1]:
-            allocated = int(self.batch_size * ratio)
+        for lang, ratio in self.language_ratios.items():
+            base_allocation = int(self.batch_size * ratio)
             available = len(self.language_indices[lang])
-            allocated = min(allocated, remaining_batch, available)
+            allocated = min(base_allocation, remaining_batch, available)
             allocations[lang] = allocated
             remaining_batch -= allocated
-            print(f"[DEBUG] {lang}: ratio={ratio:.4f}, calculated={int(self.batch_size * ratio)}, available={available}, allocated={allocated}, remaining={remaining_batch}")
+            print(f"[DEBUG] {lang}: ratio={ratio:.4f}, base_allocation={base_allocation}, available={available}, allocated={allocated}")
         
-        # Give remainder to last language
-        last_lang = sorted_langs[-1][0]
-        available = len(self.language_indices[last_lang])
-        allocations[last_lang] = min(remaining_batch, available)
-        print(f"[DEBUG] {last_lang} (last): available={available}, allocated={allocations[last_lang]}, final_remaining={remaining_batch}")
+        # Second pass: Distribute remaining samples using fractional parts
+        if remaining_batch > 0:
+            print(f"[DEBUG] Distributing {remaining_batch} remaining samples...")
+            
+            # Calculate fractional parts for fair distribution
+            fractional_parts = []
+            for lang, ratio in self.language_ratios.items():
+                exact_allocation = self.batch_size * ratio
+                fractional_part = exact_allocation - int(exact_allocation)
+                available = len(self.language_indices[lang])
+                can_take_more = allocations[lang] < available
+                fractional_parts.append((fractional_part, lang, can_take_more))
+            
+            # Sort by fractional part (descending) to give priority to largest fractions
+            fractional_parts.sort(reverse=True, key=lambda x: x[0] if x[2] else -1)
+            
+            # Distribute remaining samples to languages with highest fractional parts
+            for fractional_part, lang, can_take_more in fractional_parts:
+                if remaining_batch <= 0:
+                    break
+                if can_take_more:
+                    allocations[lang] += 1
+                    remaining_batch -= 1
+                    print(f"[DEBUG] {lang}: Added 1 sample (fractional={fractional_part:.4f}), now {allocations[lang]}")
         
         total_allocated = sum(allocations.values())
+        print(f"[DEBUG] Final allocation: {dict(allocations)}")
         print(f"[DEBUG] Total allocated: {total_allocated}/{self.batch_size}")
         
         return allocations
