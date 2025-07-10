@@ -214,15 +214,31 @@ class LanguageCurriculumSampler(Sampler):
     
     def __iter__(self):
         """Infinite iterator that yields batches continuously."""
-        while True:  # Changed from mini-epoch logic to infinite loop
-            # Sort indices by how close they are to target difficulty  
-            diffs = np.abs(self.difficulties - self.target_difficulty)
-            sorted_indices = np.argsort(diffs)
-            
-            # Yield batches from the sorted indices
-            for batch_start in range(0, len(sorted_indices), self.batch_size):
-                batch_end = min(batch_start + self.batch_size, len(sorted_indices))
-                batch_indices = sorted_indices[batch_start:batch_end]
+        while True:  # Infinite loop instead of mini-epoch logic
+            # Check if we have language-aware mode or simple curriculum mode
+            if hasattr(self, 'target_difficulty'):
+                # Simple curriculum mode - sort by single target difficulty
+                diffs = np.abs(self.difficulties - self.target_difficulty)
+                sorted_indices = np.argsort(diffs)
+                
+                # Yield batches from sorted indices
+                for batch_start in range(0, len(sorted_indices), self.batch_size):
+                    batch_end = min(batch_start + self.batch_size, len(sorted_indices))
+                    batch_indices = sorted_indices[batch_start:batch_end]
+                    
+                    if len(batch_indices) > 0:
+                        yield [int(idx) for idx in batch_indices]
+            else:
+                # Language-aware mode - sample by language ratios
+                language_allocations = self._allocate_batch_by_language()
+                
+                # Sample from each language according to its current difficulty target
+                batch_indices = []
+                
+                for lang, n_samples in language_allocations.items():
+                    if n_samples > 0:
+                        lang_indices = self._sample_from_language(lang, n_samples)
+                        batch_indices.extend(lang_indices)
                 
                 if len(batch_indices) > 0:
                     yield [int(idx) for idx in batch_indices]
@@ -313,6 +329,10 @@ class LanguageCurriculumSampler(Sampler):
     def get_language_difficulties(self) -> Dict[str, float]:
         """Get current target difficulties for all languages."""
         return dict(self.language_difficulties)
+    
+    def update_target_difficulty(self, new_target: float):
+        """Update target difficulty for simple curriculum mode."""
+        self.target_difficulty = new_target
     
     def get_language_stats(self) -> Dict[str, Dict[str, Any]]:
         """Get statistics about each language in the dataset."""
