@@ -246,9 +246,6 @@ class LanguageCurriculumSampler(Sampler):
     def _allocate_batch_by_language(self) -> Dict[str, int]:
         """Determine how many samples to take from each language."""
         allocations = {lang: 0 for lang in self.language_ratios.keys()}
-        
-        print(f"[DEBUG] Allocating batch_size={self.batch_size} across {len(self.language_ratios)} languages")
-        
         # First pass: Calculate base allocations using floor
         remaining_batch = self.batch_size
         for lang, ratio in self.language_ratios.items():
@@ -257,11 +254,9 @@ class LanguageCurriculumSampler(Sampler):
             allocated = min(base_allocation, remaining_batch, available)
             allocations[lang] = allocated
             remaining_batch -= allocated
-            print(f"[DEBUG] {lang}: ratio={ratio:.4f}, base_allocation={base_allocation}, available={available}, allocated={allocated}")
         
         # Second pass: Distribute remaining samples using fractional parts
         if remaining_batch > 0:
-            print(f"[DEBUG] Distributing {remaining_batch} remaining samples...")
             
             # Calculate fractional parts for fair distribution
             fractional_parts = []
@@ -282,11 +277,6 @@ class LanguageCurriculumSampler(Sampler):
                 if can_take_more:
                     allocations[lang] += 1
                     remaining_batch -= 1
-                    print(f"[DEBUG] {lang}: Added 1 sample (fractional={fractional_part:.4f}), now {allocations[lang]}")
-        
-        total_allocated = sum(allocations.values())
-        print(f"[DEBUG] Final allocation: {dict(allocations)}")
-        print(f"[DEBUG] Total allocated: {total_allocated}/{self.batch_size}")
         
         return allocations
     
@@ -299,14 +289,10 @@ class LanguageCurriculumSampler(Sampler):
         target_difficulty = self.language_difficulties[language]
         sorted_indices = self.language_sorted_indices[language]
         
-        print(f"[DEBUG] Sampling {n_samples} from {language}: target_difficulty={target_difficulty:.3f}, available_indices={len(sorted_indices)}")
-        
         if len(sorted_indices) == 0:
-            print(f"[DEBUG] {language}: No sorted indices available")
             return []
         
         if n_samples >= len(sorted_indices):
-            print(f"[DEBUG] {language}: Requesting more samples than available, returning all {len(sorted_indices)}")
             return sorted_indices.tolist()
         
         # Find samples closest to target difficulty for this language
