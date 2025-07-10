@@ -1184,9 +1184,13 @@ class RayPPOTrainer:
                             config=self.config.algorithm
                         )
 
-                    # Adaptive curriculum learning based on reward performance (original approach)
-                    if self.config.data.adarft.enable and hasattr(self.train_sampler, 'update_target_difficulty'):
-                        # EXISTING: Regular curriculum learning
+                    # Adaptive curriculum learning - check language-aware first
+                    if self.config.data.adarft.enable and hasattr(self.train_sampler, 'update_language_difficulties'):
+                        # NEW: Language-aware curriculum learning (prioritized)
+                        self._update_language_curriculum(batch)
+                    
+                    elif self.config.data.adarft.enable and hasattr(self.train_sampler, 'update_target_difficulty'):
+                        # EXISTING: Regular curriculum learning (fallback)
                         beta = self.config.data.adarft.beta
                         alpha = self.config.data.adarft.alpha  
                         eta = self.config.data.adarft.eta
@@ -1209,10 +1213,6 @@ class RayPPOTrainer:
                         
                         # Store target difficulty in batch meta_info for logging
                         batch.meta_info['target_difficulty'] = new_target_difficulty
-                    
-                    elif self.config.data.adarft.enable and hasattr(self.train_sampler, 'update_language_difficulties'):
-                        # NEW: Language-aware curriculum learning
-                        self._update_language_curriculum(batch)
 
                     # update critic
                     if self.use_critic:

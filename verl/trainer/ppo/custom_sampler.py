@@ -1,6 +1,6 @@
-import torch
 import numpy as np
 from torch.utils.data import Sampler
+
 
 class CurriculumSampler(Sampler):
     def __init__(self, data_source, batch_size, target_difficulty):
@@ -8,9 +8,12 @@ class CurriculumSampler(Sampler):
         self.batch_size = batch_size
         self.target_difficulty = target_difficulty
         # Extract difficulty levels from dataset
-        self.difficulties = np.array([data_source[i]['difficulty'] for i in range(len(data_source))])
+        self.difficulties = np.array([
+            data_source[i]['difficulty'] for i in range(len(data_source))
+        ])
         self.sorted_indices = np.argsort(self.difficulties)
-        print(f"Initialied with Difficulties: {self.difficulties[:10]}")
+        print(f"Initialized with Difficulties: {self.difficulties[:10]}")
+
     def __iter__(self):
         num_samples = len(self.data_source)
         batch = []
@@ -24,11 +27,13 @@ class CurriculumSampler(Sampler):
     
     def _select_closest_to_target(self):
         # Compute the absolute difference from target difficulty for each sample
-        ### add a random noise to the difficulties
-        difficulties = self.difficulties + np.random.normal(0, 0.1, len(self.difficulties))
+        # Add a random noise to the difficulties
+        difficulties = self.difficulties + np.random.normal(
+            0, 0.1, len(self.difficulties)
+        )
         diffs = np.abs(difficulties - self.target_difficulty)
         print(f"Differences: {diffs[:10]}")
-        # Get the indices of samples sorted by how close they are to the target difficulty
+        # Get indices of samples sorted by how close they are to the target
         closest_indices = np.argsort(diffs)
         print(f"Closest indices: {closest_indices[:10]}")
         # Select the top-N closest samples
