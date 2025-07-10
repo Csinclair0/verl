@@ -213,47 +213,19 @@ class LanguageCurriculumSampler(Sampler):
         print(target_msg)
     
     def __iter__(self):
-        """Yield batches respecting language ratios and curriculum sampling."""
-        difficulties_str = str(self.language_difficulties)
-        iter_msg = f"[LANG-CURRICULUM] Starting iteration with difficulties: {difficulties_str}"
-        print(iter_msg)
-        
-        batches_yielded = 0
-        
-        while batches_yielded < self.mini_epoch_size:
-            # Determine how many samples to take from each language
-            language_allocations = self._allocate_batch_by_language()
+        """Infinite iterator that yields batches continuously."""
+        while True:  # Changed from mini-epoch logic to infinite loop
+            # Sort indices by how close they are to target difficulty  
+            diffs = np.abs(self.difficulties - self.target_difficulty)
+            sorted_indices = np.argsort(diffs)
             
-            # Sample from each language according to its current difficulty target
-            batch_indices = []
-            
-            for lang, n_samples in language_allocations.items():
-                if n_samples > 0:
-                    lang_indices = self._sample_from_language(lang, n_samples)
-                    batch_indices.extend(lang_indices)
-            
-            if len(batch_indices) > 0:
-                # Log batch composition
-                batch_languages = [self.languages[idx] for idx in batch_indices]
-                lang_counts = Counter(batch_languages)
-                batch_size = len(batch_indices)
-                composition_parts = [
-                    f"{lang}: {count}/{batch_size} ({count/batch_size:.1%})"
-                    for lang, count in lang_counts.items()
-                ]
-                composition_str = ", ".join(composition_parts)
+            # Yield batches from the sorted indices
+            for batch_start in range(0, len(sorted_indices), self.batch_size):
+                batch_end = min(batch_start + self.batch_size, len(sorted_indices))
+                batch_indices = sorted_indices[batch_start:batch_end]
                 
-                if batches_yielded % 10 == 0:  # Log every 10 batches
-                    batch_msg = f"[LANG-CURRICULUM] Batch {batches_yielded}: {composition_str}"
-                    print(batch_msg)
-                
-                yield [int(idx) for idx in batch_indices]
-                batches_yielded += 1
-            else:
-                break
-        
-        final_msg = f"[LANG-CURRICULUM] Yielded {batches_yielded} batches for mini-epoch"
-        print(final_msg)
+                if len(batch_indices) > 0:
+                    yield [int(idx) for idx in batch_indices]
     
     def _allocate_batch_by_language(self) -> Dict[str, int]:
         """Determine how many samples to take from each language."""
