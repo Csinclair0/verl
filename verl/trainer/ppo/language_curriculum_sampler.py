@@ -310,7 +310,7 @@ class LanguageCurriculumSampler(Sampler):
     def _sample_from_language(self, language: str, n_samples: int) -> List[int]:
         """Sample n_samples from a specific language based on its target difficulty."""
         if n_samples <= 0:
-            print(f"[DEBUG] {language}: n_samples={n_samples}, returning empty list")
+            #print(f"[DEBUG] {language}: n_samples={n_samples}, returning empty list")
             return []
             
         target_difficulty = self.language_difficulties[language]
@@ -335,7 +335,7 @@ class LanguageCurriculumSampler(Sampler):
             closest_indices = np.argsort(noisy_diffs)[:n_samples]
         
         selected_indices = sorted_indices[closest_indices]
-        print(f"[DEBUG] {language}: Selected {len(selected_indices)} indices")
+        #print(f"[DEBUG] {language}: Selected {len(selected_indices)} indices")
         return selected_indices.tolist()
     
     def update_language_difficulties(self, batch_rewards: torch.Tensor, 
