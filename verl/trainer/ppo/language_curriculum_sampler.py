@@ -223,35 +223,28 @@ class LanguageCurriculumSampler(Sampler):
         print(target_msg)
     
     def __iter__(self):
-        """Yield batches for one mini-epoch with efficient memory management."""
-        # Use smaller mini-epoch size to reduce memory pressure
-        batches_yielded = 0
-        effective_mini_epoch_size = min(self.mini_epoch_size, 20)  # Cap at 20 batches
+        """Yield batches infinitely with periodic cleanup to avoid restarts."""
+        batch_count = 0
+        cleanup_interval = 10  # Force cleanup every 10 batches
         
-        # Pre-sample indices for this mini-epoch to avoid repeated calculations
-        if hasattr(self, '_target_difficulty'):
-            # Simple curriculum mode - pre-compute sorted indices once
-            diffs = np.abs(self.difficulties - self.target_difficulty)
-            sorted_indices = np.argsort(diffs)
-            
-            # Yield batches from pre-sorted indices
-            batch_start = 0
-            while batches_yielded < effective_mini_epoch_size and batch_start < len(sorted_indices):
-                batch_end = min(batch_start + self.batch_size, len(sorted_indices))
-                batch_indices = sorted_indices[batch_start:batch_end]
+        while True:  # Infinite iterator to avoid restart memory spikes
+            if hasattr(self, '_target_difficulty'):
+                # Simple curriculum mode - pre-compute sorted indices
+                diffs = np.abs(self.difficulties - self.target_difficulty)
+                sorted_indices = np.argsort(diffs)
                 
-                if len(batch_indices) > 0:
+                # Yield one batch from pre-sorted indices
+                if len(sorted_indices) >= self.batch_size:
+                    batch_indices = sorted_indices[:self.batch_size]
                     yield [int(idx) for idx in batch_indices]
-                    batches_yielded += 1
-                    batch_start = batch_end
                 else:
-                    break
-        else:
-            # Language-aware mode - efficient batch generation
-            while batches_yielded < effective_mini_epoch_size:
+                    # Fallback if not enough samples
+                    yield [int(idx) for idx in sorted_indices]
+            else:
+                # Language-aware mode - efficient batch generation
                 language_allocations = self._allocate_batch_by_language()
                 
-                # Sample from each language according to its current difficulty target
+                # Sample from each language according to current difficulty
                 batch_indices = []
                 
                 for lang, n_samples in language_allocations.items():
@@ -261,14 +254,17 @@ class LanguageCurriculumSampler(Sampler):
                 
                 if len(batch_indices) > 0:
                     yield [int(idx) for idx in batch_indices]
-                    batches_yielded += 1
                 else:
-                    # If no valid batch could be created, stop iteration
-                    break
-        
-        # Optional: explicit memory cleanup hint
-        import gc
-        gc.collect()
+                    # If no valid batch, yield a minimal batch to avoid hanging
+                    if len(self.data_source) > 0:
+                        yield [0]  # Yield first sample as fallback
+            
+            batch_count += 1
+            
+            # Periodic cleanup to prevent memory buildup
+            if batch_count % cleanup_interval == 0:
+                import gc
+                gc.collect()
     
     def _allocate_batch_by_language(self) -> Dict[str, int]:
         """Determine how many samples to take from each language."""
@@ -295,7 +291,8 @@ class LanguageCurriculumSampler(Sampler):
                 fractional_parts.append((fractional_part, lang, can_take_more))
             
             # Sort by fractional part (descending) to give priority to largest fractions
-            fractional_parts.sort(reverse=True, key=lambda x: x[0] if x[2] else -1)
+            fractional_parts.sort(reverse=True, 
+                                  key=lambda x: x[0] if x[2] else -1)
             
             # Distribute remaining samples to languages with highest fractional parts
             for fractional_part, lang, can_take_more in fractional_parts:
@@ -307,8 +304,9 @@ class LanguageCurriculumSampler(Sampler):
         
         return allocations
     
-    def _sample_from_language(self, language: str, n_samples: int) -> List[int]:
-        """Sample n_samples from a specific language based on its target difficulty."""
+    def _sample_from_language(self, language: str, 
+                             n_samples: int) -> List[int]:
+        """Sample n_samples from a specific language based on target difficulty."""
         if n_samples <= 0:
             #print(f"[DEBUG] {language}: n_samples={n_samples}, returning empty list")
             return []
@@ -407,6 +405,5 @@ class LanguageCurriculumSampler(Sampler):
         return stats
     
     def __len__(self):
-        """Return number of batches per mini-epoch."""
-        effective_mini_epoch_size = min(self.mini_epoch_size, 20)  # Cap at 20 batches
-        return effective_mini_epoch_size 
+        """Return a large number since this is an infinite iterator."""
+        return 999999  # Large number to prevent premature stopping 
