@@ -365,7 +365,7 @@ class LanguageCurriculumSampler(Sampler):
                     f"(target={lang_target_reward:.3f}), "
                     f"difficulty {old_target:.3f} -> {new_target:.3f}"
                 )
-                print(update_msg)
+                #print(update_msg)
     
     def get_language_difficulties(self) -> Dict[str, float]:
         """Get current target difficulties for all languages."""
