@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import json
-from collections import defaultdict, Counter
+from collections import defaultdict
 from torch.utils.data import Sampler
 from typing import Dict, List, Any, Optional
 
@@ -61,7 +61,9 @@ class LanguageCurriculumSampler(Sampler):
         # Validate language ratios sum to 1.0
         ratio_sum = sum(language_ratios.values())
         if not np.isclose(ratio_sum, 1.0, atol=1e-6):
-            raise ValueError(f"Language ratios must sum to 1.0, got {ratio_sum}")
+            raise ValueError(
+                f"Language ratios must sum to 1.0, got {ratio_sum}"
+            )
         
         # Global curriculum parameters
         self.alpha = alpha
@@ -85,13 +87,15 @@ class LanguageCurriculumSampler(Sampler):
         init_method = self._initialize_language_difficulties
         self.language_difficulties = init_method(initial_difficulties)
         
-        # Pre-sort indices by difficulty within each language for efficient sampling
+        # Pre-sort indices by difficulty within each language 
+        # for efficient sampling
         self.language_sorted_indices = self._presort_language_indices()
         
         self._log_initialization()
     
     def _extract_difficulties_and_languages(self):
-        """Extract difficulty and language (from extra_info.tgt) for all samples."""
+        """Extract difficulty and language (from extra_info.tgt) 
+        for all samples."""
         difficulties = []
         languages = []
         
@@ -117,7 +121,10 @@ class LanguageCurriculumSampler(Sampler):
                 languages.append(language)
                 
             except Exception as e:
-                warning_msg = f"[LANG-CURRICULUM] Warning: Error processing item {i}: {e}"
+                warning_msg = (
+                    f"[LANG-CURRICULUM] Warning: "
+                    f"Error processing item {i}: {e}"
+                )
                 print(warning_msg)
                 difficulties.append(0.0)
                 languages.append('unknown')
@@ -126,7 +133,10 @@ class LanguageCurriculumSampler(Sampler):
             if (i + 1) % 10000 == 0:
                 processed_count = i + 1
                 total_count = len(self.data_source)
-                progress_msg = f"[LANG-CURRICULUM] Processed {processed_count}/{total_count} samples"
+                progress_msg = (
+                    f"[LANG-CURRICULUM] Processed "
+                    f"{processed_count}/{total_count} samples"
+                )
                 print(progress_msg)
         
         return np.array(difficulties), languages
@@ -213,23 +223,32 @@ class LanguageCurriculumSampler(Sampler):
         print(target_msg)
     
     def __iter__(self):
-        """Infinite iterator that yields batches continuously."""
-        while True:  # Infinite loop instead of mini-epoch logic
-            # Check if we have language-aware mode or simple curriculum mode
-            if hasattr(self, '_target_difficulty'):
-                # Simple curriculum mode - sort by single target difficulty
-                diffs = np.abs(self.difficulties - self.target_difficulty)
-                sorted_indices = np.argsort(diffs)
+        """Yield batches for one mini-epoch with efficient memory management."""
+        # Use smaller mini-epoch size to reduce memory pressure
+        batches_yielded = 0
+        effective_mini_epoch_size = min(self.mini_epoch_size, 20)  # Cap at 20 batches
+        
+        # Pre-sample indices for this mini-epoch to avoid repeated calculations
+        if hasattr(self, '_target_difficulty'):
+            # Simple curriculum mode - pre-compute sorted indices once
+            diffs = np.abs(self.difficulties - self.target_difficulty)
+            sorted_indices = np.argsort(diffs)
+            
+            # Yield batches from pre-sorted indices
+            batch_start = 0
+            while batches_yielded < effective_mini_epoch_size and batch_start < len(sorted_indices):
+                batch_end = min(batch_start + self.batch_size, len(sorted_indices))
+                batch_indices = sorted_indices[batch_start:batch_end]
                 
-                # Yield batches from sorted indices
-                for batch_start in range(0, len(sorted_indices), self.batch_size):
-                    batch_end = min(batch_start + self.batch_size, len(sorted_indices))
-                    batch_indices = sorted_indices[batch_start:batch_end]
-                    
-                    if len(batch_indices) > 0:
-                        yield [int(idx) for idx in batch_indices]
-            else:
-                # Language-aware mode - sample by language ratios
+                if len(batch_indices) > 0:
+                    yield [int(idx) for idx in batch_indices]
+                    batches_yielded += 1
+                    batch_start = batch_end
+                else:
+                    break
+        else:
+            # Language-aware mode - efficient batch generation
+            while batches_yielded < effective_mini_epoch_size:
                 language_allocations = self._allocate_batch_by_language()
                 
                 # Sample from each language according to its current difficulty target
@@ -242,6 +261,14 @@ class LanguageCurriculumSampler(Sampler):
                 
                 if len(batch_indices) > 0:
                     yield [int(idx) for idx in batch_indices]
+                    batches_yielded += 1
+                else:
+                    # If no valid batch could be created, stop iteration
+                    break
+        
+        # Optional: explicit memory cleanup hint
+        import gc
+        gc.collect()
     
     def _allocate_batch_by_language(self) -> Dict[str, int]:
         """Determine how many samples to take from each language."""
@@ -381,4 +408,5 @@ class LanguageCurriculumSampler(Sampler):
     
     def __len__(self):
         """Return number of batches per mini-epoch."""
-        return self.mini_epoch_size 
+        effective_mini_epoch_size = min(self.mini_epoch_size, 20)  # Cap at 20 batches
+        return effective_mini_epoch_size 
