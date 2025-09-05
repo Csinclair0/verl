@@ -283,7 +283,7 @@ def compute_batch_score(
     solution_strs: List[str],
     ground_truths: List[str],
     extra_infos: List[Dict],
-): List[float]:
+):
     """Compute QE scores for a batch of examples."""
     if not (len(data_sources) == len(solution_strs) == 
             len(ground_truths) == len(extra_infos)):
