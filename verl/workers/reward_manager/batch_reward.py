@@ -14,10 +14,10 @@ from verl.utils.reward_score.token_alignment import (
 )
 
 logger = logging.getLogger(__name__)
-
-INFER_URL = (
-    "http://tk-metric.kubeflow-creator-services-translation.svc.cluster.local"
-    "/v2/models/metric_x_ft/infer"
+passthrough_metric_names = ['seedmamba', 'qwenmamba']
+INFER_URL_TEMPLATE = (
+    "http://{model_name}.kubeflow-creator-services-translation.svc.cluster.local"
+    "/v2/models/score/infer"
 )
 
 
@@ -92,7 +92,7 @@ def compute_case_sensitivity_penalty(input_text: str, response_text: str) -> flo
 
 
 @ray.remote
-def get_response_remote(data):
+def get_response_remote(data, infer_url):
     """Get response from the QE model service for a single request.
     Returns (scores, token_errors)
     scores: list of scores
@@ -102,7 +102,7 @@ def get_response_remote(data):
     num_tries = 0
     while num_tries < 5:
         try:
-            r = requests.post(INFER_URL, json=data)
+            r = requests.post(infer_url, json=data)
             scores = r.json()['outputs'][0]['data']
             token_errors = r.json()['outputs'][1]['data']
             token_errors = [json.loads(x) for x in token_errors]
@@ -194,17 +194,25 @@ def score_qe_model(inputs, metric_name, include_context_in_metrics):
         include_context = False
         include_language = False
         include_domain = False
-    qe_inputs = [
-        format_input(x, include_language, include_domain, include_context)
-        for x in inputs
-    ]
+    if passthrough_metric_names is None:
+        passthrough_metric_names = []
+
+    if metric_name in passthrough_metric_names:
+        qe_inputs = [f"{x.get('input', '')}{x.get('mt', '')}" for x in inputs]
+    elif metric_name not in ['metric_x_ft', 'metric_x']:
+        qe_inputs = [
+            format_input(x, include_language, include_domain, include_context)
+            for x in inputs
+        ]
+    else:
+        qe_inputs = inputs
     data_inputs = []
     batch_size = 4
 
     for i in range(0, len(qe_inputs), batch_size):
         batch_qe_inputs = qe_inputs[i:i + batch_size]
         data_inputs.append({
-            "model_name": 'metric_x_ft',
+            "model_name": metric_name,
             "inputs": [{
                 "name": "QE_INPUTS",
                 "datatype": "BYTES",
@@ -219,7 +227,8 @@ def score_qe_model(inputs, metric_name, include_context_in_metrics):
     if not ray.is_initialized():
         ray.init()
     
-    futures = [get_response_remote.remote(data) for data in data_inputs]
+    infer_url = INFER_URL_TEMPLATE.format(model_name=metric_name)
+    futures = [get_response_remote.remote(data, infer_url) for data in data_inputs]
     results = ray.get(futures)
     for result in results:
         if result:
@@ -240,7 +249,12 @@ def score_qe_model(inputs, metric_name, include_context_in_metrics):
     return final_scores, token_errors
 
 
-def compute_score(data_source, solution_str, ground_truth, extra_info=None):
+def compute_score(
+    data_source,
+    solution_str,
+    ground_truth,
+    extra_info=None,
+):
     """Compute score for a single example."""
     reasoning = extra_info['include_reasoning']
     include_context = extra_info['include_context_in_metrics']
@@ -253,8 +267,13 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None):
         qe_input['mt'] = extract_translations(solution_str)
     else:
         qe_input['mt'] = solution_str
+    metric_name = (
+        (extra_info or {}).get('metric_name')
+        or (extra_info or {}).get('metric')
+        or 'metric_x_ft'
+    )
     score, token_errors = score_qe_model(
-        [qe_input], 'metric_x_ft', include_context
+        [qe_input], metric_name, include_context
     )
     return score[0], token_errors[0] if token_errors else {}
 
@@ -264,7 +283,7 @@ def compute_batch_score(
     solution_strs: List[str],
     ground_truths: List[str],
     extra_infos: List[Dict],
-) -> List[float]:
+): List[float]:
     """Compute QE scores for a batch of examples."""
     if not (len(data_sources) == len(solution_strs) == 
             len(ground_truths) == len(extra_infos)):
@@ -279,31 +298,45 @@ def compute_batch_score(
     include_reasoning_globally = first_extra_info.get(
         'include_reasoning', False
     )
-    include_context_in_metrics_globally = first_extra_info.get(
-        'include_context_in_metrics', False
-    )
 
-    batch_qe_inputs = []
+    # Group by (metric_name, include_context_in_metrics)
+    grouped_indices = {}
     for i in range(len(solution_strs)):
-        extra_info = extra_infos[i]
-        solution_str = solution_strs[i]
-        ground_truth = ground_truths[i]
-        qe_input = copy.deepcopy(extra_info)
-        qe_input['target'] = ground_truth
+        ei = extra_infos[i] or {}
+        metric_name_i = ei.get('metric_name') or ei.get('metric') or 'metric_x_ft'
+        include_context_i = ei.get('include_context_in_metrics', False)
+        key = (metric_name_i, include_context_i)
+        grouped_indices.setdefault(key, []).append(i)
 
-        if include_reasoning_globally:
-            extracted_mt = extract_translations(solution_str)
-            qe_input['mt'] = extracted_mt
-        else:
-            qe_input['mt'] = solution_str
-        batch_qe_inputs.append(qe_input)
-    
-    scores, token_errors = score_qe_model(
-        inputs=batch_qe_inputs,
-        metric_name='metric_x_ft',
-        include_context_in_metrics=include_context_in_metrics_globally
-    )
-    
+    scores = [0] * len(solution_strs)
+    token_errors = [{}] * len(solution_strs)
+
+    for (metric_name_i, include_context_i), idxs in grouped_indices.items():
+        batch_qe_inputs = []
+        for i in idxs:
+            extra_info = extra_infos[i]
+            solution_str = solution_strs[i]
+            ground_truth = ground_truths[i]
+            qe_input = copy.deepcopy(extra_info)
+            qe_input['target'] = ground_truth
+            if include_reasoning_globally:
+                extracted_mt = extract_translations(solution_str)
+                qe_input['mt'] = extracted_mt
+            else:
+                qe_input['mt'] = solution_str
+            batch_qe_inputs.append(qe_input)
+
+        group_scores, group_token_errors = score_qe_model(
+            inputs=batch_qe_inputs,
+            metric_name=metric_name_i,
+            include_context_in_metrics=include_context_i,
+        )
+
+        for j, i in enumerate(idxs):
+            scores[i] = group_scores[j]
+            token_errors[i] = group_token_errors[j] if j < len(group_token_errors) else {}
+ 
+     
     return scores, token_errors
 
 
@@ -317,6 +350,7 @@ def compute_batch_score_with_token_errors(
     error_weights: Dict[str, float] = None,
     use_token_level_errors: bool = True,
     apply_case_penalty: bool = True,
+    **kwargs,
 ):
     """
     Compute QE scores for a batch with optional token-level error 
@@ -341,7 +375,10 @@ def compute_batch_score_with_token_errors(
             (scores, token_errors) tuple
     """
     scores, token_errors = compute_batch_score(
-        data_sources, solution_strs, ground_truths, extra_infos
+        data_sources,
+        solution_strs,
+        ground_truths,
+        extra_infos,
     )
     
     # Apply case sensitivity penalty if requested
