@@ -14,7 +14,6 @@ from verl.utils.reward_score.token_alignment import (
 )
 
 logger = logging.getLogger(__name__)
-passthrough_metric_names = ['seedmamba', 'qwenmamba']
 INFER_URL_TEMPLATE = (
     "http://{model_name}.kubeflow-creator-services-translation.svc.cluster.local"
     "/v2/models/score/infer"
@@ -186,6 +185,7 @@ def compare_lengths(qe_input):
 
 def score_qe_model(inputs, metric_name, include_context_in_metrics):
     """Score a batch of inputs using the QE model."""
+    passthrough_metric_names = ['seedmamba', 'qwenmamba']
     if metric_name == 'metric_x_ft':
         include_context = True
         include_language = True
@@ -194,8 +194,6 @@ def score_qe_model(inputs, metric_name, include_context_in_metrics):
         include_context = False
         include_language = False
         include_domain = False
-    if passthrough_metric_names is None:
-        passthrough_metric_names = []
 
     if metric_name in passthrough_metric_names:
         qe_inputs = [f"{x.get('input', '')}{x.get('mt', '')}" for x in inputs]
