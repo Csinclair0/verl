@@ -110,7 +110,24 @@ class MegatronEngine(BaseEngine):
         if use_mbridge:
             from verl.models.mcore.mbridge import AutoBridge
 
-            bridge = AutoBridge.from_config(self.model_config.hf_config)
+            # Workaround: mbridge doesn't support "mistral" yet, but Mistral is
+            # architecturally similar to Llama, so we temporarily map it to
+            # "llama" for AutoBridge
+            original_model_type = None
+            if (
+                hasattr(self.model_config.hf_config, "model_type")
+                and self.model_config.hf_config.model_type == "mistral"
+            ):
+                original_model_type = self.model_config.hf_config.model_type
+                self.model_config.hf_config.model_type = "llama"
+
+            try:
+                bridge = AutoBridge.from_config(self.model_config.hf_config)
+            finally:
+                # Restore original model_type if we changed it
+                if original_model_type is not None:
+                    self.model_config.hf_config.model_type = original_model_type
+
             bridge.set_extra_args(**self.engine_config.override_transformer_config)
             tf_config = bridge.config
             tf_config.fp16 = self.param_dtype == torch.float16

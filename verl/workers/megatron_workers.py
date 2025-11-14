@@ -163,7 +163,24 @@ class MegatronWorker(Worker):
         if use_mbridge:
             from verl.models.mcore.mbridge import AutoBridge
 
-            bridge = AutoBridge.from_config(hf_config)
+            # Workaround: mbridge doesn't support "mistral" yet, but Mistral is
+            # architecturally similar to Llama, so we temporarily map it to
+            # "llama" for AutoBridge
+            original_model_type = None
+            if (
+                hasattr(hf_config, "model_type")
+                and hf_config.model_type == "mistral"
+            ):
+                original_model_type = hf_config.model_type
+                hf_config.model_type = "llama"
+
+            try:
+                bridge = AutoBridge.from_config(hf_config)
+            finally:
+                # Restore original model_type if we changed it
+                if original_model_type is not None:
+                    hf_config.model_type = original_model_type
+
             bridge.set_extra_args(**override_transformer_config)
             tf_config = bridge.config
             tf_config.fp16 = fp16
