@@ -1,6 +1,7 @@
-verl x Ascend
+Ascend Quickstart
 ===================================
 
+Last updated: 10/31/2025.
 
 我们在 verl 上增加对华为昇腾设备的支持。
 
@@ -9,7 +10,9 @@ verl x Ascend
 
 Atlas 200T A2 Box16
 
-Atlas 800T A2
+Atlas 900 A2 PODc
+
+Atlas 800T A3
 
 
 安装
@@ -23,13 +26,14 @@ Atlas 800T A2
 +-----------+-------------+
 | Python    | == 3.10     |
 +-----------+-------------+
-| CANN      | == 8.1.RC1  |
+| CANN      | == 8.2.RC1  |
 +-----------+-------------+
 | torch     | == 2.5.1    |
 +-----------+-------------+
-| torch_npu | == 2.5.1.RC1|
+| torch_npu | == 2.5.1    |
 +-----------+-------------+
 
+基础环境准备请参照这份 `文档 <https://gitcode.com/Ascend/pytorch>`_ 。
 
 vllm & vllm-ascend
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -39,20 +43,20 @@ vllm & vllm-ascend
 .. code-block:: bash
     
     # vllm
-    git clone -b v0.7.3 --depth 1 https://github.com/vllm-project/vllm.git
+    git clone -b v0.9.1 --depth 1 https://github.com/vllm-project/vllm.git
     cd vllm
     pip install -r requirements-build.txt
 
     # for Atlas 200T A2 Box16
     VLLM_TARGET_DEVICE=empty pip install -e . --extra-index https://download.pytorch.org/whl/cpu/
     
-    # for Atlas 800T A2
+    # for Atlas 900 A2 PODc
     VLLM_TARGET_DEVICE=empty pip install -e .
 
 .. code-block:: bash
     
     # vllm-ascend
-    git clone -b v0.7.3 --depth 1 https://github.com/vllm-project/vllm-ascend.git
+    git clone -b v0.9.1 --depth 1 https://github.com/vllm-project/vllm-ascend.git
     cd vllm-ascend
     export COMPILE_CUSTOM_KERNELS=1
     python setup.py install
@@ -67,25 +71,32 @@ vllm & vllm-ascend
     pip install -r requirements-npu.txt
     pip install -e .
 
+DockerFile镜像构建
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+如需要通过DockerFile构建镜像， 请参考 `文档 <https://github.com/volcengine/verl/tree/main/docs/ascend_tutorial/dockerfile_build_guidance.rst>`_ 。
+
 其他三方库说明
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 +--------------+---------------+
 | software     | description   |
 +--------------+---------------+
-| transformers | >= v4.52.0    |
+| transformers | v4.52.4       |
 +--------------+---------------+
 | flash_attn   | not supported |
 +--------------+---------------+
 | liger-kernel | not supported |
 +--------------+---------------+
-| tensordict   | 0.8.3 (ARM)   |
-+--------------+---------------+
 
-1. 支持通过 transformers 使能 --flash_attention_2， transformers 需大于等于 4.52.0版本。
+1. 支持通过 transformers 使能 --flash_attention_2， transformers 需等于 4.52.4版本。
 2. 不支持通过 flash_attn 使能 flash attention 加速。
 3. 不支持 liger-kernel 使能。
-4. 针对 ARM 服务器，tensordict 要求 0.8.3，可在依赖安装完成后再手动安装 tensordict。
+4. 针对 x86 服务器，需要安装 cpu 版本的 torchvision。
+
+.. code-block:: bash
+
+    pip install torchvision==0.20.1+cpu --index-url https://download.pytorch.org/whl/cpu
 
 
 快速开始
@@ -96,7 +107,7 @@ vllm & vllm-ascend
 
 .. code-block:: bash
 
-    python3 examples/data_preprocess/gsm8k.py --local_dir ~/data/gsm8k
+    python3 examples/data_preprocess/gsm8k.py --local_save_dir ~/data/gsm8k
 
 2.执行训练
 
@@ -137,7 +148,7 @@ vllm & vllm-ascend
         actor_rollout_ref.ref.fsdp_config.param_offload=True \
         algorithm.kl_ctrl.kl_coef=0.001 \
         trainer.critic_warmup=0 \
-        trainer.logger=['console'] \
+        trainer.logger=console \
         trainer.project_name='verl_grpo_example_gsm8k' \
         trainer.experiment_name='qwen2_7b_function_rm' \
         trainer.n_gpus_per_node=8 \
@@ -147,51 +158,72 @@ vllm & vllm-ascend
         trainer.total_epochs=1 \
         trainer.device=npu $@
 
+(可选) 设置MindSpeed训练后端指导
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1. 参考 `MindSpeed README <https://gitcode.com/Ascend/MindSpeed>`_ 说明安装 MindSpeed 加速库。
+
+2. 使能 verl worker 模型 ``strategy`` 配置为 ``megatron`` ，例如 ``actor_rollout_ref.actor.strategy=megatron``。
+
+3. MindSpeed 自定义入参可通过 ``override_transformer_config`` 参数传入，例如对 actor 模型开启 FA 特性可使用 ``+actor_rollout_ref.actor.megatron.override_transformer_config.use_flash_attn=True``。
+
+4. 更多特性信息可参考 `MindSpeed+verl 文档 <https://gitcode.com/Ascend/MindSpeed/blob/master/docs/user-guide/verl.md>`_ 。
 
 支持现状
 -----------------------------------
 
-+-----------+----------------------+-------------+-------------------+----------------------+
-| algorithm |         model        | rewards mae |  throughput ratio |        hardware      |
-+-----------+----------------------+-------------+-------------------+----------------------+
-|   GRPO    | Qwen2.5-7B-instruct  |    0.38%    |        0.588      |  Atlas 200T A2 Box16 |
-+-----------+----------------------+-------------+-------------------+----------------------+
-|   GRPO    | Qwen2.5-32B-instruct |    0.30%    |        0.685      |  Atlas 200T A2 Box16 |
-+-----------+----------------------+-------------+-------------------+----------------------+
-|   DAPO    | Qwen2.5-7B-instruct  |    3.83%    |        pending    |  Atlas 200T A2 Box16 |
-+-----------+----------------------+-------------+-------------------+----------------------+
+**表1** RL类算法
 
-目前支持 Qwen2.5 的 GRPO 训练，Qwen2.5-VL GRPO 训练在 vllm-ascend 的修复后支持，涉及到的issue为：
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+| algorithm |         model           |   actor.strategy  |   rollout.name    |         hardware         |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   GRPO    | Qwen2.5-7B-instruct     |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   GRPO    | Qwen2.5-32B-instruct    |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   GRPO    | Qwen2.5-VL-3B-instruct  |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   GRPO    | Qwen2.5-VL-7B-instruct  |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   GRPO    | Qwen2.5-VL-32B-instruct |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   GRPO    | Qwen3-8B                |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   GRPO    | Qwen3-32B               |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   DAPO    | Qwen2.5-7B-instruct     |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   DAPO    | Qwen2.5-32B             |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   DAPO    | Qwen3-8B-base           |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   DAPO    | Qwen3-14B-base          |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   DAPO    | Qwen3-30B-A3B-base      |        FSDP       |    vllm-ascend    |    Atlas 200T A2 Box16   |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   DAPO    | Qwen3-30B-A3B           |      megatron     |    vllm-ascend    |    Atlas 800T A3         |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
+|   PPO     | Qwen3-8B                |        FSDP       |    vllm-ascend    |    Atlas 900 A2 PODc     |
++-----------+-------------------------+-------------------+-------------------+--------------------------+
 
-1. `issues#809 <https://github.com/vllm-project/vllm-ascend/issues/809>`_
+**表2** SFT类算法
 
-2. `issues#825 <https://github.com/vllm-project/vllm-ascend/issues/825>`_
-
-
-精度对比说明
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-对于 SFT 类算法，我们期望在相同配置下华为昇腾设备与 A100 的 loss 平均绝对误差<= 2%。计算方式如下图。更多信息请参考 `精度计算说明 <https://www.hiascend.com/document/detail/zh/Pytorch/600/ptmoddevg/trainingmigrguide/LMaccuracy_0001.html>`_。
-
-.. image:: https://github.com/eric-haibin-lin/verl-community/blob/main/docs/loss_comparison.png?raw=true
-   :alt: loss_comparison
-
-根据经验，对于 GRPO 等 RL 类算法，我们期望在相同配置下华为昇腾设备与 A100 的 rewards 平均绝对误差<= 4%，计算方式参考上图。
-
-
-吞吐对比说明
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Ascend npu 和 A100 分别取日志中前4个 step 的 "perf/throughput" 做平均， throughput ratio = npu 平均值 / A100 平均值。 
++-----------+-------------------------+-------------------+----------------------+
+| algorithm |         model           |   actor.strategy  |        hardware      |
++-----------+-------------------------+-------------------+----------------------+
+|  SFT-PEFT | Qwen3-8B                |        FSDP       |   Atlas 900 A2 PODc  |
++-----------+-------------------------+-------------------+----------------------+
+| ReTool-SFT| Qwen2.5-7B-instruct     |        FSDP       |   Atlas 900 A2 PODc  |
++-----------+-------------------------+-------------------+----------------------+
 
 
 
 计划
 -----------------------------------
 
-查看 `roadmap <https://github.com/volcengine/verl/discussions/900>`_ 获取更多特性的支持进度。
+查看 `roadmap <https://github.com/volcengine/verl/discussions/2171>`_ 获取更多特性的支持进度。
 
 
 
 声明
 -----------------------------------
-verl中提供的ascend支持代码皆为参考样例，商业使用请通过官方正式途径沟通，谢谢。
+verl中提供的ascend支持代码、Dockerfile、镜像皆为参考样例，如在生产环境中使用请通过官方正式途径沟通，谢谢。

@@ -15,9 +15,10 @@
 Contains commonly used utilities for ray
 """
 
+import asyncio
 import concurrent.futures
 import os
-from typing import Any, List, Optional
+from typing import Any, Optional
 
 import ray
 
@@ -45,7 +46,7 @@ def ray_noset_visible_devices(env_vars=os.environ):
     return any(env_vars.get(env_var) for env_var in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST)
 
 
-def parallel_put(data_list: List[Any], max_workers: Optional[int] = None):
+def parallel_put(data_list: list[Any], max_workers: Optional[int] = None):
     """
     Puts a list of data into the Ray object store in parallel using a thread pool.
 
@@ -79,3 +80,13 @@ def parallel_put(data_list: List[Any], max_workers: Optional[int] = None):
             output[index] = data_ref
 
     return output
+
+
+def get_event_loop():
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    return loop

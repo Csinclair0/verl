@@ -17,13 +17,21 @@
 # convert huggingface config to mcore transformer config
 
 
+import warnings
+from typing import TypeVar
+
 import torch
 import torch.nn.functional as F
+from megatron.core import parallel_state as mpu
 from megatron.core.transformer import MLATransformerConfig, TransformerConfig
 from transformers import PretrainedConfig
 
+T = TypeVar("T", bound=TransformerConfig)
 
-def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> dict:
+
+def _get_base_transformer_config(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> dict:
     """
     Create a base TransformerConfig with common parameters across different model architectures.
     TODO: (ycl) use dataclass or converter config?
@@ -36,10 +44,12 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
     Returns:
         TransformerConfig with common parameters
     """
-    from megatron.core import parallel_state as mpu
 
     # Common parallel state parameters
-    overlap_p2p_comm = mpu.get_virtual_pipeline_model_parallel_world_size() is not None and mpu.get_virtual_pipeline_model_parallel_world_size() > 1
+    overlap_p2p_comm = (
+        mpu.get_virtual_pipeline_model_parallel_world_size() is not None
+        and mpu.get_virtual_pipeline_model_parallel_world_size() > 1
+    )
     batch_p2p_comm = False
 
     # Base configuration with common parameters
@@ -54,6 +64,7 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
         "hidden_dropout": getattr(hf_config, "hidden_dropout", 0.0),
         "kv_channels": getattr(hf_config, "head_dim", None),
         "layernorm_epsilon": hf_config.rms_norm_eps,
+        "add_bias_linear": True,
         # Activation and normalization
         "activation_func": F.silu,
         "normalization": "RMSNorm",
@@ -79,72 +90,115 @@ def _get_base_transformer_config(hf_config: PretrainedConfig, dtype: torch.dtype
     }
 
     # Update with any provided overrides
+    # override_transformer_config_kwargs as kwargs shall never be none
     base_config.update(override_transformer_config_kwargs)
-    print(f"Overridden TF init config: {base_config}")
 
     return base_config
 
 
-def hf_to_mcore_config_dense(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> TransformerConfig:
+def _get_mla_transformer_config(
+    hf_config: PretrainedConfig, mla_rope_config: dict, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> dict:
+    """
+    Create a MLATransformerConfig with common parameters across different model architectures.
+    This is specifically for MLA models like DeepseekV3.
+
+    Args:
+        hf_config: HuggingFace model configuration
+        mla_rope_config: MLA specific RoPE configuration
+        dtype: Data type for the model
+        override_transformer_config_kwargs: Additional parameters to override defaults
+
+    Returns:
+        MLATransformerConfig with common parameters
+    """
+    base_config = _get_base_transformer_config(hf_config=hf_config, dtype=dtype, **override_transformer_config_kwargs)
+    mla_config = {
+        # MLA specific parameters
+        "q_lora_rank": hf_config.q_lora_rank,
+        "kv_lora_rank": hf_config.kv_lora_rank,
+        "qk_head_dim": hf_config.qk_nope_head_dim,
+        "qk_pos_emb_head_dim": hf_config.qk_rope_head_dim,
+        "v_head_dim": hf_config.v_head_dim,
+        "rotary_base": hf_config.rope_theta,
+        "rotary_scaling_factor": mla_rope_config["factor"],
+        "rope_type": mla_rope_config["type"],
+        "max_position_embeddings": mla_rope_config["original_max_position_embeddings"],
+        "beta_fast": mla_rope_config["beta_fast"],
+        "beta_slow": mla_rope_config["beta_slow"],
+        "mscale": mla_rope_config["mscale"],
+        "mscale_all_dim": mla_rope_config["mscale_all_dim"],
+    }
+
+    base_config.update(mla_config)
+    return base_config
+
+
+def check_and_construct_configs(original_config: dict, cls: type[T]) -> T:
+    """
+    Check and disable incompatible configurations for older Megatron version.
+
+    Args:
+        original_config (dict): The original model configuration.
+
+    Returns:
+        dict: The updated model configuration with incompatible settings disabled.
+    """
+    removed_keys = []
+    for key in original_config.keys():
+        if not hasattr(cls, key):
+            removed_keys.append(key)
+    if removed_keys:
+        warnings.warn(
+            f"The following keys are not supported in the current Megatron version and will be removed: {removed_keys}",
+            stacklevel=2,
+        )
+        for key in removed_keys:
+            original_config.pop(key)
+
+    original_config = mapping_string_to_attn_backend(original_config)
+    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        print(f"Overridden {cls.__name__} init config: {original_config}")
+    return cls(**original_config)
+
+
+def hf_to_mcore_config_dense(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> TransformerConfig:
     # for LlamaForCausalLM or Qwen2ForCausalLM
-    from megatron.core import parallel_state as mpu
-
     # Handle Gemma3's nested config structure
+    original_config = hf_config
     if hasattr(hf_config, 'text_config'):
-        num_hidden_layers = hf_config.text_config.num_hidden_layers
-        hidden_size = hf_config.text_config.hidden_size
-        num_attention_heads = hf_config.text_config.num_attention_heads
-        num_key_value_heads = hf_config.text_config.num_key_value_heads
-        intermediate_size = hf_config.text_config.intermediate_size
-        attention_dropout = hf_config.text_config.attention_dropout
+        # Use text_config for model parameters, but keep original_config for architecture check
+        hf_config = hf_config.text_config
+
+    # Check architectures from original config (which may have nested structure)
+    architectures = getattr(original_config, 'architectures', getattr(hf_config, 'architectures', []))
+    if architectures:
+        arch_str = architectures[0] if isinstance(architectures, list) else str(architectures)
+        qkv_bias = True if "Qwen2" in arch_str else getattr(hf_config, "attention_bias", False)
+        qk_layernorm = True if "Qwen3" in arch_str or 'Gemma3' in arch_str else False
     else:
-        num_hidden_layers = hf_config.num_hidden_layers
-        hidden_size = hf_config.hidden_size
-        num_attention_heads = hf_config.num_attention_heads
-        num_key_value_heads = hf_config.num_key_value_heads
-        intermediate_size = hf_config.intermediate_size
-        attention_dropout = hf_config.attention_dropout
+        qkv_bias = getattr(hf_config, "attention_bias", False)
+        qk_layernorm = False
 
-    qkv_bias = True if "Qwen2ForCausalLM" in hf_config.architectures else getattr(hf_config, "attention_bias", False)
-    overlap_p2p_comm = mpu.get_virtual_pipeline_model_parallel_world_size() is not None and mpu.get_virtual_pipeline_model_parallel_world_size() > 1
-    batch_p2p_comm = False
-    transformer_config = TransformerConfig(
-        num_layers=num_hidden_layers,
-        hidden_size=hidden_size,
-        num_attention_heads=num_attention_heads,
-        num_query_groups=num_key_value_heads,
-        ffn_hidden_size=intermediate_size,
-        activation_func=F.silu,
-        normalization="RMSNorm",
-        gated_linear_unit=True,
-        use_cpu_initialization=True,
+    args: dict = _get_base_transformer_config(
+        hf_config=hf_config,
+        dtype=dtype,
+        use_cpu_initialization=False,
         add_bias_linear=False,
-        tensor_model_parallel_size=mpu.get_tensor_model_parallel_world_size(),
-        pipeline_model_parallel_size=mpu.get_pipeline_model_parallel_world_size(),
-        virtual_pipeline_model_parallel_size=mpu.get_virtual_pipeline_model_parallel_world_size(),
-        context_parallel_size=mpu.get_context_parallel_world_size(),
-        overlap_p2p_comm=overlap_p2p_comm,
-        batch_p2p_comm=batch_p2p_comm,
-        pipeline_dtype=dtype,
-        params_dtype=dtype,
-        sequence_parallel=mpu.get_tensor_model_parallel_world_size() > 1,
-        variable_seq_lengths=True,
-        masked_softmax_fusion=True,
-        moe_token_dispatcher_type="alltoall",
-        attention_dropout=attention_dropout,
-        hidden_dropout=getattr(hf_config, "hidden_dropout", 0.0),
         add_qkv_bias=qkv_bias,
-        bf16=dtype is torch.bfloat16,
+        qk_layernorm=qk_layernorm,
     )
-    qkv_bias = True if "Qwen2ForCausalLM" in hf_config.architectures else getattr(hf_config, "attention_bias", False)
-    qk_layernorm = True if "Qwen3ForCausalLM" in hf_config.architectures or 'Gemma3ForCausalLM' in hf_config.architectures else False
-
-    args = _get_base_transformer_config(hf_config=hf_config, dtype=dtype, use_cpu_initialization=False, add_bias_linear=False, add_qkv_bias=qkv_bias, qk_layernorm=qk_layernorm, **override_transformer_config_kwargs)
-    return TransformerConfig(**args)
+    # override_transformer_config_kwargs as kwargs shall never be none
+    args.update(override_transformer_config_kwargs)
+    return check_and_construct_configs(args, TransformerConfig)
 
 
-def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> TransformerConfig:
-    args = _get_base_transformer_config(
+def hf_to_mcore_config_qwen2moe(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> TransformerConfig:
+    args: dict = _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
         use_cpu_initialization=False,
@@ -169,13 +223,16 @@ def hf_to_mcore_config_qwen2moe(hf_config: PretrainedConfig, dtype: torch.dtype,
         # Qwen specific
         moe_router_pre_softmax=True,
         add_qkv_bias=True,
-        **override_transformer_config_kwargs,
     )
-    return TransformerConfig(**args)
+    # override_transformer_config_kwargs as kwargs shall never be none
+    args.update(override_transformer_config_kwargs)
+    return check_and_construct_configs(args, TransformerConfig)
 
 
-def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> TransformerConfig:
-    args = _get_base_transformer_config(
+def hf_to_mcore_config_mixtral(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> TransformerConfig:
+    args: dict = _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
         use_cpu_initialization=False,
@@ -199,13 +256,16 @@ def hf_to_mcore_config_mixtral(hf_config: PretrainedConfig, dtype: torch.dtype, 
         apply_rope_fusion=True,
         bias_activation_fusion=True,
         bias_dropout_fusion=True,
-        **override_transformer_config_kwargs,
     )
-    return TransformerConfig(**args)
+    # override_transformer_config_kwargs as kwargs shall never be none
+    args.update(override_transformer_config_kwargs)
+    return check_and_construct_configs(args, TransformerConfig)
 
 
-def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> TransformerConfig:
-    args = _get_base_transformer_config(
+def hf_to_mcore_config_qwen3moe(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> TransformerConfig:
+    args: dict = _get_base_transformer_config(
         hf_config=hf_config,
         dtype=dtype,
         use_cpu_initialization=False,
@@ -228,12 +288,15 @@ def hf_to_mcore_config_qwen3moe(hf_config: PretrainedConfig, dtype: torch.dtype,
         # Qwen specific
         moe_router_pre_softmax=False,
         qk_layernorm=True,
-        **override_transformer_config_kwargs,
     )
-    return TransformerConfig(**args)
+    # override_transformer_config_kwargs as kwargs shall never be none
+    args.update(override_transformer_config_kwargs)
+    return check_and_construct_configs(args, TransformerConfig)
 
 
-def hf_to_mcore_config_dpskv3(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> MLATransformerConfig:
+def hf_to_mcore_config_dpskv3(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> MLATransformerConfig:
     # DeepseekV3ForCausalLM
     from megatron.core.transformer.enums import AttnBackend
 
@@ -258,20 +321,23 @@ def hf_to_mcore_config_dpskv3(hf_config: PretrainedConfig, dtype: torch.dtype, *
 
     # disable MTP and quantization for now
     if "num_nextn_predict_layers" in hf_config:
-        assert hf_config.num_nextn_predict_layers == 0, "MTP is not supported for now, please modify the config.json to set num_nextn_predict_layers to 0"
-    assert "quantization_config" not in hf_config or not hf_config.quantization_config, "quantization is not supported for now, please modify the config.json to remove quantization_config"
+        assert hf_config.num_nextn_predict_layers == 0, (
+            "MTP is not supported for now, please modify the config.json to set num_nextn_predict_layers to 0"
+        )
+    assert "quantization_config" not in hf_config or not hf_config.quantization_config, (
+        "quantization is not supported for now, please modify the config.json to remove quantization_config"
+    )
 
-    args = _get_base_transformer_config(
+    args: dict = _get_mla_transformer_config(
         hf_config=hf_config,
+        mla_rope_config=mla_rope_config,
         dtype=dtype,
+        # Additional parameters
         use_cpu_initialization=False,
         add_bias_linear=False,
         attention_backend=AttnBackend.fused,
-        bf16=dtype is torch.bfloat16,
-        layernorm_epsilon=hf_config.rms_norm_eps,
-        ffn_hidden_size=hf_config.intermediate_size,
         qk_layernorm=True,
-        # moe specific
+        # Standard MoE parameters
         moe_ffn_hidden_size=hf_config.moe_intermediate_size,
         moe_token_dispatcher_type="alltoall",
         moe_router_bias_update_rate=0.001,
@@ -288,33 +354,19 @@ def hf_to_mcore_config_dpskv3(hf_config: PretrainedConfig, dtype: torch.dtype, *
         moe_router_pre_softmax=True,
         moe_router_topk_scaling_factor=hf_config.routed_scaling_factor,
         moe_layer_freq=moe_layer_freq,
-        # MLA
-        q_lora_rank=hf_config.q_lora_rank,
-        kv_lora_rank=hf_config.kv_lora_rank,
-        qk_head_dim=hf_config.qk_nope_head_dim,
-        qk_pos_emb_head_dim=hf_config.qk_rope_head_dim,
-        v_head_dim=hf_config.v_head_dim,
-        rotary_base=hf_config.rope_theta,
-        rotary_scaling_factor=mla_rope_config["factor"],
-        rope_type=mla_rope_config["type"],
-        mscale=mla_rope_config["mscale"],
-        mscale_all_dim=mla_rope_config["mscale_all_dim"],
-        max_position_embeddings=mla_rope_config["original_max_position_embeddings"],
-        beta_fast=mla_rope_config["beta_fast"],
-        beta_slow=mla_rope_config["beta_slow"],
         # mcore 0.12 moe
         moe_router_dtype="fp64",
         disable_bf16_reduced_precision_matmul=True,
-        # other
+        # Other optimizations
         # deallocate_pipeline_outputs=True,
         # gradient_accumulation_fusion=True,
         persist_layer_norm=True,
         bias_activation_fusion=True,
         bias_dropout_fusion=True,
     )
-    if override_transformer_config_kwargs:
-        args.update(override_transformer_config_kwargs)
-    transformer_config = MLATransformerConfig(**args)
+    # override_transformer_config_kwargs as kwargs shall never be none
+    args.update(override_transformer_config_kwargs)
+    transformer_config = check_and_construct_configs(args, MLATransformerConfig)
     # MTP
     if "num_nextn_predict_layers" in hf_config:
         transformer_config.mtp_num_layers = hf_config.num_nextn_predict_layers
@@ -323,11 +375,35 @@ def hf_to_mcore_config_dpskv3(hf_config: PretrainedConfig, dtype: torch.dtype, *
     return transformer_config
 
 
-def hf_to_mcore_config_qwen2_5_vl(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> TransformerConfig:
+def hf_to_mcore_config_qwen2_5_vl(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> TransformerConfig:
     # Qwen2_5_VLForConditionalGeneration
-    raise NotImplementedError("Qwen2_5_VLForConditionalGeneration is not supported yet")
+
+    args = _get_base_transformer_config(
+        hf_config=hf_config,
+        dtype=dtype,
+        add_bias_linear=False,
+        # qwen specific
+        add_qkv_bias=True,
+        mrope_section=hf_config.rope_scaling["mrope_section"],
+    )
+    # override_transformer_config_kwargs as kwargs shall never be none
+    args.update(override_transformer_config_kwargs)
+    args = mapping_string_to_attn_backend(args)
+    return TransformerConfig(**args)
 
 
-def hf_to_mcore_config_llama4(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> TransformerConfig:
+def hf_to_mcore_config_llama4(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> TransformerConfig:
     # Llama4ForConditionalGeneration
     raise NotImplementedError("Llama4ForConditionalGeneration is not supported yet")
+
+
+def mapping_string_to_attn_backend(args: dict) -> dict:
+    if "attention_backend" in args and isinstance(args["attention_backend"], str):
+        from megatron.core.transformer.enums import AttnBackend
+
+        args["attention_backend"] = AttnBackend[args["attention_backend"]]
+    return args

@@ -18,15 +18,23 @@ logger = logging.getLogger(__name__)
 def is_torch_npu_available() -> bool:
     """Check the availability of NPU"""
     try:
-        import torch_npu  # noqa: F401
-
-        return torch.npu.is_available()
+        if hasattr(torch, "npu") and callable(getattr(torch.npu, "is_available", None)):
+            return torch.npu.is_available()
+        return False
     except ImportError:
         return False
 
 
 is_cuda_available = torch.cuda.is_available()
 is_npu_available = is_torch_npu_available()
+
+
+def get_visible_devices_keyword() -> str:
+    """Function that gets visible devices keyword name.
+    Returns:
+        'CUDA_VISIBLE_DEVICES' or `ASCEND_RT_VISIBLE_DEVICES`
+    """
+    return "CUDA_VISIBLE_DEVICES" if is_cuda_available else "ASCEND_RT_VISIBLE_DEVICES"
 
 
 def get_device_name() -> str:
@@ -55,3 +63,32 @@ def get_torch_device() -> any:
     except AttributeError:
         logger.warning(f"Device namespace '{device_name}' not found in torch, try to load torch.cuda.")
         return torch.cuda
+
+
+def get_device_id() -> int:
+    """Return current device id based on the device type.
+    Returns:
+        device index
+    """
+    return get_torch_device().current_device()
+
+
+def get_nccl_backend() -> str:
+    """Return nccl backend type based on the device type.
+    Returns:
+        nccl backend type string.
+    """
+    if is_npu_available:
+        return "hccl"
+    else:
+        # default to nccl
+        return "nccl"
+
+
+def set_expandable_segments(enable: bool) -> None:
+    """Enable or disable expandable segments for cuda.
+    Args:
+        enable (bool): Whether to enable expandable segments. Used to avoid OOM.
+    """
+    if is_cuda_available:
+        torch.cuda.memory._set_allocator_settings(f"expandable_segments:{enable}")

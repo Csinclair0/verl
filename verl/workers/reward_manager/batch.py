@@ -14,16 +14,32 @@
 
 from collections import defaultdict
 import random
+from typing import Any
+
 import torch
 # import wandb # Removed as wandb.log and wandb.Table are no longer used directly here
 
 from verl import DataProto
 from verl.workers.reward_manager import register
+from verl.workers.reward_manager.abstract import AbstractRewardManager, RawRewardFn
 
 
 @register("batch")
-class BatchRewardManager:
-    def __init__(self, tokenizer, num_examine, compute_score, reward_fn_key="data_source", **reward_kwargs):
+class BatchRewardManager(AbstractRewardManager):
+    """
+    A batch reward manager that computes rewards for a batch of data.
+
+    Args:
+        tokenizer (Tokenizer): The tokenizer to use for decoding the responses.
+        num_examine (int): The number of responses to examine.
+        compute_score (callable): The function to compute the rewards.
+        reward_fn_key (str): The key to use for the reward function.
+        reward_kwargs (dict): The keyword arguments to pass to the reward function.
+    """
+
+    def __init__(
+        self, tokenizer, num_examine, compute_score: RawRewardFn, reward_fn_key="data_source", **reward_kwargs
+    ):
         self.tokenizer = tokenizer
         self.num_examine = num_examine
         self.compute_score = compute_score
@@ -55,7 +71,11 @@ class BatchRewardManager:
 
         ground_truths = [item.non_tensor_batch["reward_model"].get("ground_truth", None) for item in data]
         data_sources = data.non_tensor_batch[self.reward_fn_key]
-        extras = data.non_tensor_batch.get("extra_info", [None] * len(data))
+        rollout_reward_scores = data.non_tensor_batch.get("reward_scores", [{} for _ in range(len(data))])
+        extras = data.non_tensor_batch.get("extra_info", [{} for _ in range(len(data))])
+
+        for i in range(len(data)):
+            extras[i]["rollout_reward_scores"] = rollout_reward_scores[i]
 
         scores = self.compute_score(
             data_sources=data_sources,
@@ -67,7 +87,7 @@ class BatchRewardManager:
 
         return scores
 
-    def __call__(self, data: DataProto, return_dict=False):
+    def __call__(self, data: DataProto, return_dict: bool = False) -> torch.Tensor | dict[str, Any]:
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
         if "rm_scores" in data.batch.keys():
             # Apply token-level penalties if specified
@@ -83,12 +103,9 @@ class BatchRewardManager:
                 data.batch["rm_scores"] = token_level_scores
 
             if return_dict:
-                # Even if returning early, ensure a consistent structure if detailed dict is expected
-                # However, in this branch, we don't have scores/tables computed by this manager.
-                # So, we return only what's available. The caller should be aware.
-                # Or, we assume if rm_scores is present, this detailed logging is skipped.
-                # For now, sticking to minimal changes for this branch.
-                return {"reward_tensor": data.batch["rm_scores"]}
+                reward_extra_keys = data.meta_info.get("reward_extra_keys", [])
+                reward_extra_info = {key: data.non_tensor_batch[key] for key in reward_extra_keys}
+                return {"reward_tensor": data.batch["rm_scores"], "reward_extra_info": reward_extra_info}
             else:
                 return data.batch["rm_scores"]
 
@@ -100,18 +117,9 @@ class BatchRewardManager:
         valid_response_lengths = attention_mask[:, prompt_len:].sum(dim=-1)
         data_sources = data.non_tensor_batch[self.reward_fn_key]
 
-        scores = self.verify(data) # This is a list of scores
-        rewards = [] # This will hold the primary numeric reward for each item
-        
-        wandb_tables_payload = [] # To store data for tables
-
-        # Use different names for thresholds to avoid confusion with batch min/max
-        low_score_threshold = min(scores) + 0.001 if scores else 0
-        high_score_threshold = max(scores) - 0.001 if scores else 0
-        
-        random_index = -1
-        if len(data) > 0:
-            random_index = random.randint(0, len(data) - 1)
+        scores = self.verify(data)
+        rewards = []
+        already_printed: dict[str, Any] = {}
 
         for i in range(len(data)):
             length = valid_response_lengths[i].item()

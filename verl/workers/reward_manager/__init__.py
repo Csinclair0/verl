@@ -19,14 +19,13 @@ from .naive import NaiveRewardManager
 from .prime import PrimeRewardManager
 from .token_error_batch import TokenErrorBatchRewardManager
 
-# Note(haibin.lin): no need to include all reward managers here 
-# in case of complicated dependencies
+# Note(haibin.lin): no need to include all reward managers here in case of complicated dependencies
 __all__ = [
-    "BatchRewardManager", 
-    "DAPORewardManager", 
-    "NaiveRewardManager", 
+    "BatchRewardManager",
+    "DAPORewardManager",
+    "NaiveRewardManager",
     "PrimeRewardManager",
     "TokenErrorBatchRewardManager",
-    "register", 
-    "get_reward_manager_cls"
+    "register",
+    "get_reward_manager_cls",
 ]

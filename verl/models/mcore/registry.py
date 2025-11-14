@@ -17,7 +17,7 @@ Registry module for model architecture components.
 """
 
 from enum import Enum
-from typing import Callable, Dict, Type
+from typing import Callable
 
 import torch
 import torch.nn as nn
@@ -33,9 +33,8 @@ from .config_converter import (
     hf_to_mcore_config_qwen2moe,
     hf_to_mcore_config_qwen3moe,
 )
-from .model_forward import (
-    gptmodel_forward,
-)
+from .model_forward import gptmodel_forward_no_padding, model_forward_gen
+from .model_forward_fused import fused_forward_model_gen
 from .model_initializer import (
     BaseModelInitializer,
     DeepseekV3Model,
@@ -49,6 +48,7 @@ from .weight_converter import (
     McoreToHFWeightConverterDense,
     McoreToHFWeightConverterDpskv3,
     McoreToHFWeightConverterMixtral,
+    McoreToHFWeightConverterQwen2_5_VL,
     McoreToHFWeightConverterQwen2Moe,
     McoreToHFWeightConverterQwen3Moe,
 )
@@ -64,13 +64,18 @@ class SupportedModel(Enum):
     QWEN2_5_VL = "Qwen2_5_VLForConditionalGeneration"  # not supported
     LLAMA4 = "Llama4ForConditionalGeneration"  # not tested
     QWEN3 = "Qwen3ForCausalLM"  # tested
-    QWEN3_MOE = "Qwen3MoeForCausalLM"  # not tested
+    QWEN3_MOE = "Qwen3MoeForCausalLM"  # tested
     GEMMA3 = "Gemma3ForCausalLM"  # not tested
     GEMMA3_GEN = "Gemma3ForConditionalGeneration"  # not tested
+    GLM4_MOE = "Glm4MoeForCausalLM"
+
+    QWEN3_TOKEN_CLASSIFICATION = "Qwen3ForTokenClassification"
+    QWEN3_MOE_VL = "Qwen3VLMoeForConditionalGeneration"
+    QWEN3_VL = "Qwen3VLForConditionalGeneration"
 
 
 # Registry for model configuration converters
-MODEL_CONFIG_CONVERTER_REGISTRY: Dict[SupportedModel, Callable[[PretrainedConfig, torch.dtype], TransformerConfig]] = {
+MODEL_CONFIG_CONVERTER_REGISTRY: dict[SupportedModel, Callable[[PretrainedConfig, torch.dtype], TransformerConfig]] = {
     SupportedModel.LLAMA: hf_to_mcore_config_dense,
     SupportedModel.QWEN2: hf_to_mcore_config_dense,
     SupportedModel.QWEN2_MOE: hf_to_mcore_config_qwen2moe,
@@ -83,10 +88,11 @@ MODEL_CONFIG_CONVERTER_REGISTRY: Dict[SupportedModel, Callable[[PretrainedConfig
     SupportedModel.QWEN3_MOE: hf_to_mcore_config_qwen3moe,
     SupportedModel.GEMMA3: hf_to_mcore_config_dense,
     SupportedModel.GEMMA3_GEN: hf_to_mcore_config_dense,
+    SupportedModel.QWEN3_TOKEN_CLASSIFICATION: hf_to_mcore_config_dense,
 }
 
 # Registry for model initializers
-MODEL_INITIALIZER_REGISTRY: Dict[SupportedModel, Type[BaseModelInitializer]] = {
+MODEL_INITIALIZER_REGISTRY: dict[SupportedModel, type[BaseModelInitializer]] = {
     SupportedModel.LLAMA: DenseModel,
     SupportedModel.QWEN2: DenseModel,
     SupportedModel.QWEN2_MOE: Qwen2MoEModel,
@@ -99,27 +105,71 @@ MODEL_INITIALIZER_REGISTRY: Dict[SupportedModel, Type[BaseModelInitializer]] = {
     SupportedModel.QWEN3_MOE: Qwen3MoEModel,
     SupportedModel.GEMMA3: DenseModel,
     SupportedModel.GEMMA3_GEN: DenseModel,
+    SupportedModel.QWEN3_TOKEN_CLASSIFICATION: DenseModel,
 }
 
 # Registry for model forward functions
-MODEL_FORWARD_REGISTRY: Dict[SupportedModel, Callable] = {
-    SupportedModel.LLAMA: gptmodel_forward,
-    SupportedModel.QWEN2: gptmodel_forward,
-    SupportedModel.QWEN2_MOE: gptmodel_forward,
-    SupportedModel.MISTRAL: gptmodel_forward,
-    SupportedModel.MIXTRAL: gptmodel_forward,
-    SupportedModel.DEEPSEEK_V3: gptmodel_forward,
-    SupportedModel.QWEN2_5_VL: gptmodel_forward,
-    SupportedModel.LLAMA4: gptmodel_forward,
-    SupportedModel.QWEN3: gptmodel_forward,
-    SupportedModel.QWEN3_MOE: gptmodel_forward,
-    SupportedModel.GEMMA3: gptmodel_forward,
-    SupportedModel.GEMMA3_GEN: gptmodel_forward,
-    SupportedModel.DEEPSEEK_V3: gptmodel_forward,
+MODEL_FORWARD_REGISTRY: dict[SupportedModel, Callable] = {
+    SupportedModel.LLAMA: model_forward_gen(),
+    SupportedModel.QWEN2: model_forward_gen(),
+    SupportedModel.QWEN2_MOE: model_forward_gen(),
+    SupportedModel.MISTRAL: model_forward_gen(),
+    SupportedModel.MIXTRAL: model_forward_gen(),
+    SupportedModel.DEEPSEEK_V3: model_forward_gen(),
+    SupportedModel.QWEN2_5_VL: model_forward_gen(True),
+    SupportedModel.LLAMA4: model_forward_gen(),
+    SupportedModel.QWEN3: model_forward_gen(),
+    SupportedModel.QWEN3_MOE: model_forward_gen(),
+    SupportedModel.GEMMA3: model_forward_gen(),
+    SupportedModel.GEMMA3_GEN: model_forward_gen(),
+    SupportedModel.QWEN3_MOE_VL: model_forward_gen(True),
+    SupportedModel.QWEN3_VL: model_forward_gen(True),
+    SupportedModel.GLM4_MOE: model_forward_gen(),
+    SupportedModel.QWEN3_TOKEN_CLASSIFICATION: model_forward_gen(),
+}
+
+# Registry for model forward functions
+MODEL_FORWARD_NOPAD_REGISTRY: dict[SupportedModel, Callable] = {
+    SupportedModel.LLAMA: gptmodel_forward_no_padding,
+    SupportedModel.QWEN2: gptmodel_forward_no_padding,
+    SupportedModel.QWEN2_MOE: gptmodel_forward_no_padding,
+    SupportedModel.MIXTRAL: gptmodel_forward_no_padding,
+    SupportedModel.DEEPSEEK_V3: gptmodel_forward_no_padding,
+    SupportedModel.QWEN2_5_VL: gptmodel_forward_no_padding,
+    SupportedModel.QWEN3_MOE_VL: gptmodel_forward_no_padding,
+    SupportedModel.QWEN3_VL: gptmodel_forward_no_padding,
+    SupportedModel.LLAMA4: gptmodel_forward_no_padding,
+    SupportedModel.QWEN3: gptmodel_forward_no_padding,
+    SupportedModel.QWEN3_MOE: gptmodel_forward_no_padding,
+    SupportedModel.GEMMA3: gptmodel_forward_no_padding,
+    SupportedModel.GEMMA3_GEN: gptmodel_forward_no_padding,
+    SupportedModel.DEEPSEEK_V3: gptmodel_forward_no_padding,
+    SupportedModel.GLM4_MOE: gptmodel_forward_no_padding,
+    SupportedModel.QWEN3_TOKEN_CLASSIFICATION: gptmodel_forward_no_padding,
+}
+
+# Registry for model forward functions
+MODEL_FORWARD_FUSED_REGISTRY: dict[SupportedModel, Callable] = {
+    SupportedModel.LLAMA: fused_forward_model_gen(),
+    SupportedModel.QWEN2: fused_forward_model_gen(),
+    SupportedModel.QWEN2_MOE: fused_forward_model_gen(),
+    SupportedModel.MISTRAL: fused_forward_model_gen(),
+    SupportedModel.MIXTRAL: fused_forward_model_gen(),
+    SupportedModel.DEEPSEEK_V3: fused_forward_model_gen(),
+    SupportedModel.QWEN2_5_VL: fused_forward_model_gen(True),
+    SupportedModel.LLAMA4: fused_forward_model_gen(),
+    SupportedModel.QWEN3: fused_forward_model_gen(),
+    SupportedModel.QWEN3_MOE: fused_forward_model_gen(),
+    SupportedModel.GEMMA3: fused_forward_model_gen(),
+    SupportedModel.GEMMA3_GEN: fused_forward_model_gen(),
+    SupportedModel.QWEN3_MOE_VL: fused_forward_model_gen(True),
+    SupportedModel.QWEN3_VL: fused_forward_model_gen(True),
+    SupportedModel.GLM4_MOE: fused_forward_model_gen(),
+    SupportedModel.QWEN3_TOKEN_CLASSIFICATION: fused_forward_model_gen(),
 }
 
 # Registry for model weight converters
-MODEL_WEIGHT_CONVERTER_REGISTRY: Dict[SupportedModel, Type] = {
+MODEL_WEIGHT_CONVERTER_REGISTRY: dict[SupportedModel, type] = {
     SupportedModel.LLAMA: McoreToHFWeightConverterDense,
     SupportedModel.QWEN2: McoreToHFWeightConverterDense,
     SupportedModel.QWEN2_MOE: McoreToHFWeightConverterQwen2Moe,
@@ -130,6 +180,8 @@ MODEL_WEIGHT_CONVERTER_REGISTRY: Dict[SupportedModel, Type] = {
     SupportedModel.QWEN3_MOE: McoreToHFWeightConverterQwen3Moe,
     SupportedModel.GEMMA3: McoreToHFWeightConverterDense,
     SupportedModel.GEMMA3_GEN: McoreToHFWeightConverterDense,
+    SupportedModel.QWEN2_5_VL: McoreToHFWeightConverterQwen2_5_VL,
+    SupportedModel.QWEN3_TOKEN_CLASSIFICATION: McoreToHFWeightConverterDense,
 }
 
 
@@ -138,10 +190,24 @@ def get_supported_model(model_type: str) -> SupportedModel:
         return SupportedModel(model_type)
     except ValueError as err:
         supported_models = [e.value for e in SupportedModel]
-        raise NotImplementedError(f"Model Type: {model_type} not supported. Supported models: {supported_models}") from err
+        raise NotImplementedError(
+            f"Model Type: {model_type} not supported. Supported models: {supported_models}"
+        ) from err
 
 
-def hf_to_mcore_config(hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs) -> TransformerConfig:
+def hf_to_mcore_config(
+    hf_config: PretrainedConfig, dtype: torch.dtype, **override_transformer_config_kwargs
+) -> TransformerConfig:
+    """Convert huggingface PretrainedConfig to mcore TransformerConfig.
+
+    Args:
+        hf_config: The huggingface PretrainedConfig.
+        dtype: The dtype of the model.
+        **override_transformer_config_kwargs: The kwargs to override the transformer config.
+
+    Returns:
+        The mcore TransformerConfig.
+    """
     assert len(hf_config.architectures) == 1, "Only one architecture is supported for now"
     model = get_supported_model(hf_config.architectures[0])
     return MODEL_CONFIG_CONVERTER_REGISTRY[model](hf_config, dtype, **override_transformer_config_kwargs)
@@ -176,7 +242,13 @@ def init_mcore_model(
     model = get_supported_model(hf_config.architectures[0])
     initializer_cls = MODEL_INITIALIZER_REGISTRY[model]
     initializer = initializer_cls(tfconfig, hf_config)
-    return initializer.initialize(pre_process=pre_process, post_process=post_process, share_embeddings_and_output_weights=share_embeddings_and_output_weights, value=value, **extra_kwargs)
+    return initializer.initialize(
+        pre_process=pre_process,
+        post_process=post_process,
+        share_embeddings_and_output_weights=share_embeddings_and_output_weights,
+        value=value,
+        **extra_kwargs,
+    )
 
 
 def get_mcore_forward_fn(hf_config: PretrainedConfig) -> Callable:
@@ -186,6 +258,24 @@ def get_mcore_forward_fn(hf_config: PretrainedConfig) -> Callable:
     assert len(hf_config.architectures) == 1, "Only one architecture is supported for now"
     model = get_supported_model(hf_config.architectures[0])
     return MODEL_FORWARD_REGISTRY[model]
+
+
+def get_mcore_forward_no_padding_fn(hf_config: PretrainedConfig) -> Callable:
+    """
+    Get the forward function for given model architecture.
+    """
+    assert len(hf_config.architectures) == 1, "Only one architecture is supported for now"
+    model = get_supported_model(hf_config.architectures[0])
+    return MODEL_FORWARD_NOPAD_REGISTRY[model]
+
+
+def get_mcore_forward_fused_fn(hf_config: PretrainedConfig) -> Callable:
+    """
+    Get the forward function for given model architecture.
+    """
+    assert len(hf_config.architectures) == 1, "Only one architecture is supported for now"
+    model = get_supported_model(hf_config.architectures[0])
+    return MODEL_FORWARD_FUSED_REGISTRY[model]
 
 
 def get_mcore_weight_converter(hf_config: PretrainedConfig, dtype: torch.dtype) -> Callable:
