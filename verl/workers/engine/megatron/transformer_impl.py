@@ -110,7 +110,7 @@ class MegatronEngine(BaseEngine):
         if use_mbridge:
             from verl.models.mcore.mbridge import AutoBridge
 
-            bridge = AutoBridge.from_config(self.model_config.hf_config, dtype=self.param_dtype)
+            bridge = AutoBridge.from_config(self.model_config.hf_config)
             bridge.set_extra_args(**self.engine_config.override_transformer_config)
             tf_config = bridge.config
             tf_config.fp16 = self.param_dtype == torch.float16

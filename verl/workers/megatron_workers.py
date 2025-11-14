@@ -163,7 +163,7 @@ class MegatronWorker(Worker):
         if use_mbridge:
             from verl.models.mcore.mbridge import AutoBridge
 
-            bridge = AutoBridge.from_config(hf_config, dtype=dtype)
+            bridge = AutoBridge.from_config(hf_config)
             bridge.set_extra_args(**override_transformer_config)
             tf_config = bridge.config
             tf_config.fp16 = fp16
